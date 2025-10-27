@@ -1,14 +1,16 @@
-"""Tab responsible for loading and describing the target field (talhão)."""
+﻿"""Tab that loads a field polygon and prepares slope metrics for FertiMaq."""
 
 from __future__ import annotations
 
 import json
 import math
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 import xml.etree.ElementTree as ET
 
+import numpy as np
 import tkinter as tk
 import urllib.error
 import urllib.parse
@@ -22,35 +24,57 @@ from ferticalc_ui_blueprint import create_card, primary_button, section_title
 from .base import FertiMaqTab, tab_registry
 
 EARTH_RADIUS_M = 6_371_000.0
-OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
+DEFAULT_OPERATIONAL_PERCENTILE = 80
+FALLBACK_OPERATIONAL_PERCENTILE = 70
+OPERATIONAL_THRESHOLD_DEG = 15.0
+ALPHA_DEGREES = 30.0
+ALPHA_DEGREES = 30.0
 
 
-def _load_polygon_from_kmz(path: Path) -> Tuple[List[Tuple[float, float, float]], str]:
+@dataclass
+class DemGrid:
+    elevations: np.ndarray
+    mask: np.ndarray
+    x_coords: np.ndarray
+    y_coords: np.ndarray
+    step: float
+
+
+def _read_kml_from_kmz(path: Path) -> str:
     with zipfile.ZipFile(path) as kmz:
         kml_name = next((name for name in kmz.namelist() if name.lower().endswith(".kml")), None)
         if not kml_name:
-            raise ValueError("Arquivo KMZ não possui nenhum KML interno.")
-        xml_data = kmz.read(kml_name)
+            raise ValueError("KMZ sem arquivo KML interno.")
+        return kmz.read(kml_name).decode("utf-8")
 
-    root = ET.fromstring(xml_data)
+
+def _load_polygon(path: Path) -> tuple[list[tuple[float, float, float]], str]:
+    if path.suffix.lower() == ".kmz":
+        xml_text = _read_kml_from_kmz(path)
+    elif path.suffix.lower() == ".kml":
+        xml_text = path.read_text(encoding="utf-8")
+    else:
+        raise ValueError("Arquivo do talhao deve ser .kmz ou .kml.")
+
+    root = ET.fromstring(xml_text)
     namespaces = {"kml": "http://www.opengis.net/kml/2.2"}
 
     placemark = root.find(".//kml:Placemark", namespaces) or root.find(".//{*}Placemark")
     if placemark is None:
-        raise ValueError("Nenhum Placemark encontrado no KML.")
+        raise ValueError("Nenhum Placemark encontrado no arquivo.")
 
     name_elem = placemark.find("kml:name", namespaces) or placemark.find("{*}name")
-    placemark_name = name_elem.text.strip() if name_elem is not None and name_elem.text else path.stem
+    name = name_elem.text.strip() if name_elem is not None and name_elem.text else path.stem
 
     coords_elem = (
         placemark.find(".//kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates", namespaces)
         or placemark.find(".//{*}Polygon/{*}outerBoundaryIs/{*}LinearRing/{*}coordinates")
     )
     if coords_elem is None or not coords_elem.text:
-        raise ValueError("Nenhum polígono com coordenadas foi encontrado no KML.")
+        raise ValueError("Poligono do talhao nao possui coordenadas.")
 
     raw_chunks = [chunk for chunk in coords_elem.text.replace("\n", " ").split() if chunk.strip()]
-    points: List[Tuple[float, float, float]] = []
+    points: list[tuple[float, float, float]] = []
     for chunk in raw_chunks:
         parts = chunk.split(",")
         if len(parts) < 2:
@@ -61,41 +85,52 @@ def _load_polygon_from_kmz(path: Path) -> Tuple[List[Tuple[float, float, float]]
         points.append((lon, lat, alt))
 
     if len(points) < 3:
-        raise ValueError("O polígono do talhão possui pontos insuficientes.")
+        raise ValueError("Talhao possui pontos insuficientes.")
     if points[0] == points[-1]:
         points = points[:-1]
 
     points = _enrich_elevation(points)
-    return points, placemark_name
+    return points, name
 
 
-def _enrich_elevation(points: List[Tuple[float, float, float]]) -> List[Tuple[float, float, float]]:
+def _enrich_elevation(points: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
     if not points:
         return points
 
-    unique_alts = {round(pt[2], 3) for pt in points}
-    if len(unique_alts) > 1:
+    altitudes = {round(pt[2], 2) for pt in points}
+    if len(altitudes) > 1:
         return points
 
-    try:
-        enriched = _fetch_elevations(points)
-    except Exception:
+    coords = [(lon, lat) for lon, lat, _ in points]
+    elevations = _fetch_elevations(coords)
+    if not elevations:
         return points
 
-    if not enriched:
-        return points
-
-    return enriched
+    return [(lon, lat, elev) for (lon, lat, _), elev in zip(points, elevations)]
 
 
-def _fetch_elevations(points: List[Tuple[float, float, float]], chunk_size: int = 50) -> List[Tuple[float, float, float]]:
-    results: List[Tuple[float, float, float]] = []
-    for start in range(0, len(points), chunk_size):
-        subset = points[start : start + chunk_size]
-        query = "|".join(f"{lat:.6f},{lon:.6f}" for lon, lat, _ in subset)
-        url = f"{OPEN_ELEVATION_URL}?locations={urllib.parse.quote(query, safe=',|')}"
+def _fetch_elevations(coords: Sequence[tuple[float, float]], datasets: Sequence[str] | None = None) -> list[float]:
+    datasets = datasets or ("srtm30m", "aster30m", "etopo1")
+    for dataset in datasets:
+        values = _fetch_elevation_dataset(coords, dataset)
+        if values:
+            return values
+    return []
+
+
+def _fetch_elevation_dataset(
+    coords: Sequence[tuple[float, float]],
+    dataset: str,
+    *,
+    chunk_size: int = 100,
+) -> list[float]:
+    elevations: list[float] = []
+    for start in range(0, len(coords), chunk_size):
+        subset = coords[start : start + chunk_size]
+        query = "|".join(f"{lat:.6f},{lon:.6f}" for lon, lat in subset)
+        url = f"https://api.opentopodata.org/v1/{dataset}?locations={urllib.parse.quote(query, safe=',|')}"
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(url, timeout=15) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
             return []
@@ -104,34 +139,38 @@ def _fetch_elevations(points: List[Tuple[float, float, float]], chunk_size: int 
         if len(api_results) != len(subset):
             return []
 
-        for original, item in zip(subset, api_results):
+        for item in api_results:
             elevation = item.get("elevation")
             if elevation is None:
-                results.append(original)
-            else:
-                results.append((original[0], original[1], float(elevation)))
-
-    return results
+                return []
+            elevations.append(float(elevation))
+    return elevations
 
 
-def _project_points(points: Sequence[Tuple[float, float, float]]) -> List[Tuple[float, float]]:
+def _project_points(points: Sequence[tuple[float, float, float]]) -> tuple[list[tuple[float, float]], dict[str, float]]:
     lats_rad = [math.radians(lat) for _, lat, _ in points]
     lons_rad = [math.radians(lon) for lon, _, _ in points]
     lat0 = sum(lats_rad) / len(lats_rad)
     lon0 = sum(lons_rad) / len(lons_rad)
     cos_lat0 = math.cos(lat0) or 1.0
 
-    projected: List[Tuple[float, float]] = []
+    projected: list[tuple[float, float]] = []
     for lon, lat, _ in points:
         lon_r = math.radians(lon)
         lat_r = math.radians(lat)
         x = EARTH_RADIUS_M * (lon_r - lon0) * cos_lat0
         y = EARTH_RADIUS_M * (lat_r - lat0)
         projected.append((x, y))
-    return projected
+    return projected, {"lat0": lat0, "lon0": lon0, "cos_lat0": cos_lat0}
 
 
-def _polygon_area_m2(points: Sequence[Tuple[float, float]]) -> float:
+def _inverse_project(x: float, y: float, projection: dict[str, float]) -> tuple[float, float]:
+    lat = projection["lat0"] + (y / EARTH_RADIUS_M)
+    lon = projection["lon0"] + (x / (EARTH_RADIUS_M * projection["cos_lat0"]))
+    return math.degrees(lon), math.degrees(lat)
+
+
+def _polygon_area_m2(points: Sequence[tuple[float, float]]) -> float:
     if not points:
         return 0.0
     area = 0.0
@@ -143,123 +182,266 @@ def _polygon_area_m2(points: Sequence[Tuple[float, float]]) -> float:
     return abs(area) * 0.5
 
 
-def _solve_3x3(a11, a12, a13, a21, a22, a23, a31, a32, a33, b1, b2, b3) -> Tuple[float, float, float] | None:
-    det = (
-        a11 * (a22 * a33 - a23 * a32)
-        - a12 * (a21 * a33 - a23 * a31)
-        + a13 * (a21 * a32 - a22 * a31)
-    )
-    if abs(det) < 1e-9:
+def _point_in_polygon(x: float, y: float, polygon: Sequence[tuple[float, float]]) -> bool:
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        intersects = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi)
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _choose_sampling_step(area_m2: float) -> float:
+    if area_m2 <= 30_000.0:
+        return 10.0
+    if area_m2 <= 200_000.0:
+        return 20.0
+    if area_m2 <= 1_000_000.0:
+        return 35.0
+    if area_m2 <= 5_000_000.0:
+        return 60.0
+    return 90.0
+
+
+def _collect_dem_grid(
+    projected: Sequence[tuple[float, float]],
+    projection: dict[str, float],
+) -> DemGrid | None:
+    area_m2 = _polygon_area_m2(projected)
+    if area_m2 <= 0:
         return None
 
-    det_x = (
-        b1 * (a22 * a33 - a23 * a32)
-        - a12 * (b2 * a33 - a23 * b3)
-        + a13 * (b2 * a32 - a22 * b3)
-    )
-    det_y = (
-        a11 * (b2 * a33 - a23 * b3)
-        - b1 * (a21 * a33 - a23 * a31)
-        + a13 * (a21 * b3 - b2 * a31)
-    )
-    det_z = (
-        a11 * (a22 * b3 - b2 * a32)
-        - a12 * (a21 * b3 - b2 * a31)
-        + b1 * (a21 * a32 - a22 * a31)
-    )
+    step = _choose_sampling_step(area_m2)
+    min_x = min(px for px, _ in projected)
+    max_x = max(px for px, _ in projected)
+    min_y = min(py for _, py in projected)
+    max_y = max(py for _, py in projected)
 
-    return det_x / det, det_y / det, det_z / det
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+    approx_count = ((span_x / step) + 1) * ((span_y / step) + 1)
+    if approx_count > 4000:
+        scale = math.sqrt(approx_count / 4000)
+        step *= scale
+
+    x_coords = np.arange(min_x, max_x + step, step, dtype=float)
+    y_coords = np.arange(min_y, max_y + step, step, dtype=float)
+
+    for _ in range(3):
+        mask = np.zeros((y_coords.size, x_coords.size), dtype=bool)
+        coords: list[tuple[float, float]] = []
+        for iy, y in enumerate(y_coords):
+            for ix, x in enumerate(x_coords):
+                if _point_in_polygon(x, y, projected):
+                    mask[iy, ix] = True
+                    lon, lat = _inverse_project(x, y, projection)
+                    coords.append((lon, lat))
+
+        if (area_m2 / 10_000.0) > 30:
+            from scipy.ndimage import binary_erosion
+
+            eroded = binary_erosion(mask, structure=np.ones((3, 3), dtype=bool), border_value=0)
+            if eroded.sum() > 0:
+                mask = eroded
+                coords = []
+                for iy, y in enumerate(y_coords):
+                    for ix, x in enumerate(x_coords):
+                        if mask[iy, ix]:
+                            lon, lat = _inverse_project(x, y, projection)
+                            coords.append((lon, lat))
+
+        if mask.sum() >= 3:
+            break
+
+        step = max(step / 2.0, 5.0)
+        x_coords = np.arange(min_x, max_x + step, step, dtype=float)
+        y_coords = np.arange(min_y, max_y + step, step, dtype=float)
+    else:
+        return None
+
+    elevations = _fetch_elevations(coords)
+    if not elevations or len(elevations) != len(coords):
+        return None
+
+    elev_matrix = np.full(mask.shape, np.nan, dtype=float)
+    idx = 0
+    for iy in range(mask.shape[0]):
+        for ix in range(mask.shape[1]):
+            if mask[iy, ix]:
+                elev_matrix[iy, ix] = elevations[idx]
+                idx += 1
+
+    return DemGrid(elevations=elev_matrix, mask=mask, x_coords=x_coords, y_coords=y_coords, step=step)
 
 
-def _average_slope_degree(points_xy: Sequence[Tuple[float, float]], points_xyz: Sequence[Tuple[float, float, float]]) -> float:
-    n = min(len(points_xy), len(points_xyz))
-    if n < 3:
-        return 0.0
+def _compute_slope_percent(grid: DemGrid) -> np.ndarray:
+    elev = grid.elevations
+    mask = grid.mask
+    if not np.isfinite(elev[mask]).any():
+        return np.full_like(elev, np.nan, dtype=float)
 
-    sum_x = sum_y = sum_z = 0.0
-    sum_xx = sum_yy = sum_xy = sum_xz = sum_yz = 0.0
+    ny, nx = elev.shape
+    slopes = np.full((ny, nx), np.nan, dtype=float)
+    step = grid.step
 
-    for (x, y), (_, _, z) in zip(points_xy[:n], points_xyz[:n]):
-        sum_x += x
-        sum_y += y
-        sum_z += z
-        sum_xx += x * x
-        sum_yy += y * y
-        sum_xy += x * y
-        sum_xz += x * z
-        sum_yz += y * z
-
-    solution = _solve_3x3(
-        sum_xx,
-        sum_xy,
-        sum_x,
-        sum_xy,
-        sum_yy,
-        sum_y,
-        sum_x,
-        sum_y,
-        n,
-        sum_xz,
-        sum_yz,
-        sum_z,
-    )
-    if solution is None:
-        return 0.0
-    a, b, _ = solution
-    gradient = math.sqrt(a * a + b * b)
-    return math.degrees(math.atan(gradient))
-
-
-def _max_slope_degree(points_xy: Sequence[Tuple[float, float]], points_xyz: Sequence[Tuple[float, float, float]]) -> float:
-    n = min(len(points_xy), len(points_xyz))
-    if n < 2:
-        return 0.0
-
-    max_slope = 0.0
-    for i in range(n):
-        x1, y1 = points_xy[i]
-        z1 = points_xyz[i][2]
-        for j in range(i + 1, n):
-            x2, y2 = points_xy[j]
-            z2 = points_xyz[j][2]
-            dist = math.hypot(x2 - x1, y2 - y1)
-            if dist <= 0.0:
+    for iy in range(ny):
+        for ix in range(nx):
+            if not mask[iy, ix] or not np.isfinite(elev[iy, ix]):
                 continue
-            slope = math.degrees(math.atan(abs(z2 - z1) / dist))
-            if slope > max_slope:
-                max_slope = slope
-    return max_slope
+
+            if ix > 0 and ix < nx - 1 and mask[iy, ix - 1] and mask[iy, ix + 1]:
+                dzdx = (elev[iy, ix + 1] - elev[iy, ix - 1]) / (2 * step)
+            elif ix > 0 and mask[iy, ix - 1]:
+                dzdx = (elev[iy, ix] - elev[iy, ix - 1]) / step
+            elif ix < nx - 1 and mask[iy, ix + 1]:
+                dzdx = (elev[iy, ix + 1] - elev[iy, ix]) / step
+            else:
+                dzdx = 0.0
+
+            if iy > 0 and iy < ny - 1 and mask[iy - 1, ix] and mask[iy + 1, ix]:
+                dzdy = (elev[iy + 1, ix] - elev[iy - 1, ix]) / (2 * step)
+            elif iy > 0 and mask[iy - 1, ix]:
+                dzdy = (elev[iy, ix] - elev[iy - 1, ix]) / step
+            elif iy < ny - 1 and mask[iy + 1, ix]:
+                dzdy = (elev[iy + 1, ix] - elev[iy, ix]) / step
+            else:
+                dzdy = 0.0
+
+            slope_rad = math.atan(math.sqrt(dzdx * dzdx + dzdy * dzdy))
+            slopes[iy, ix] = math.tan(slope_rad) * 100.0
+
+    return slopes
+
+
+def _uniform_filter(array: np.ndarray, window: int) -> np.ndarray:
+    from scipy.ndimage import uniform_filter
+
+    return uniform_filter(array, size=window, mode="nearest")
+
+
+def _smooth(values: np.ndarray, mask: np.ndarray, window_px: int) -> np.ndarray:
+    if window_px < 3:
+        window_px = 3
+    if window_px % 2 == 0:
+        window_px += 1
+    valid = mask & np.isfinite(values)
+    weighted = np.where(valid, values, 0.0)
+    counts = _uniform_filter(valid.astype(np.float32), window_px)
+    smoothed = _uniform_filter(weighted, window_px)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        smoothed = smoothed / counts
+    smoothed[counts == 0] = np.nan
+    return smoothed
+
+
+def _winsorize(values: np.ndarray, mask: np.ndarray, pct: float) -> np.ndarray:
+    if pct <= 0:
+        return values
+    valid = values[mask & np.isfinite(values)]
+    if valid.size == 0:
+        return values
+    low = np.nanpercentile(valid, pct)
+    high = np.nanpercentile(valid, 100 - pct)
+    return np.clip(values, low, high)
+
+
+def _compute_percentiles(
+    grid: DemGrid,
+    janela_m: float,
+    winsorizar_pct: float,
+) -> tuple[dict[int, float], float]:
+    slopes_pct = _compute_slope_percent(grid)
+    mask = grid.mask & np.isfinite(slopes_pct)
+    if mask.sum() == 0:
+        raise ValueError("Nenhum pixel valido para calcular aclive.")
+
+    window_px = max(3, int(round(janela_m / grid.step)))
+    smoothed = _smooth(slopes_pct, mask, window_px)
+    if winsorizar_pct > 0:
+        smoothed = _winsorize(smoothed, mask, winsorizar_pct)
+
+    valid = smoothed[mask & np.isfinite(smoothed)]
+    if valid.size == 0:
+        raise ValueError("Nenhum pixel valido apos suavizacao.")
+
+    percentiles = {
+        50: float(np.nanpercentile(valid, 50)),
+        70: float(np.nanpercentile(valid, 70)),
+        80: float(np.nanpercentile(valid, 80)),
+        85: float(np.nanpercentile(valid, 85)),
+        90: float(np.nanpercentile(valid, 90)),
+        95: float(np.nanpercentile(valid, 95)),
+    }
+    return percentiles, float(grid.step)
+
+
+def _pct_to_deg(slope_pct: float) -> float:
+    return math.degrees(math.atan(slope_pct / 100.0))
+
+
+def _slopes_from_edges(
+    projected: Sequence[tuple[float, float]],
+    original: Sequence[tuple[float, float, float]],
+) -> tuple[float, float, float, int]:
+    n = min(len(projected), len(original))
+    if n < 2:
+        return 0.0, 0.0, 0.0, DEFAULT_OPERATIONAL_PERCENTILE
+
+    weighted_sum = 0.0
+    total_length = 0.0
+    max_deg = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        x1, y1 = projected[i]
+        x2, y2 = projected[j]
+        dist = math.hypot(x2 - x1, y2 - y1)
+        if dist <= 0.0:
+            continue
+        z1 = original[i][2]
+        z2 = original[j][2]
+        rise = abs(z2 - z1)
+        slope_rad = math.atan(rise / dist)
+        weighted_sum += slope_rad * dist
+        total_length += dist
+        slope_deg = math.degrees(slope_rad)
+        if slope_deg > max_deg:
+            max_deg = slope_deg
+
+    if total_length == 0.0:
+        return 0.0, max_deg, max_deg, DEFAULT_OPERATIONAL_PERCENTILE
+
+    avg_deg = math.degrees(weighted_sum / total_length)
+    return avg_deg, max_deg, max_deg, DEFAULT_OPERATIONAL_PERCENTILE
 
 
 def _slopes_from_polygon(
-    projected: Sequence[Tuple[float, float]],
-    original: Sequence[Tuple[float, float, float]],
-) -> Tuple[float, float]:
-    average = _average_slope_degree(projected, original)
-    maximum = _max_slope_degree(projected, original)
-    return average, maximum
+    projected: Sequence[tuple[float, float]],
+    original: Sequence[tuple[float, float, float]],
+    projection: dict[str, float],
+) -> tuple[float, float, float, int]:
+    grid = _collect_dem_grid(projected, projection)
+    if grid:
+        percentiles, _ = _compute_percentiles(grid, janela_m=75.0, winsorizar_pct=0.0)
+        median_deg = _pct_to_deg(percentiles[50])
+        operational_pct = percentiles[DEFAULT_OPERATIONAL_PERCENTILE]
+        operational_percentile = DEFAULT_OPERATIONAL_PERCENTILE
+        operational_deg_raw = _pct_to_deg(operational_pct)
+        if (
+            operational_deg_raw > OPERATIONAL_THRESHOLD_DEG
+            and percentiles.get(FALLBACK_OPERATIONAL_PERCENTILE) is not None
+        ):
+            operational_pct = percentiles[FALLBACK_OPERATIONAL_PERCENTILE]
+            operational_percentile = FALLBACK_OPERATIONAL_PERCENTILE
+        grade_operacional_pct = operational_pct * math.sin(math.radians(ALPHA_DEGREES))
+        operational_deg = _pct_to_deg(grade_operacional_pct)
+        severe_deg = _pct_to_deg(percentiles[95])
+        return median_deg, operational_deg, severe_deg, operational_percentile
 
-
-def _scale_to_canvas(points: Sequence[Tuple[float, float]], width: int, height: int, padding: int = 24) -> List[float]:
-    if not points:
-        return []
-    xs = [px for px, _ in points]
-    ys = [py for _, py in points]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-
-    span_x = max(max_x - min_x, 1.0)
-    span_y = max(max_y - min_y, 1.0)
-
-    scale = min((width - 2 * padding) / span_x, (height - 2 * padding) / span_y)
-    scale = max(scale, 0.0001)
-
-    coords: List[float] = []
-    for x, y in points:
-        cx = padding + (x - min_x) * scale
-        cy = height - (padding + (y - min_y) * scale)
-        coords.extend((cx, cy))
-    return coords
+    return _slopes_from_edges(projected, original)
 
 
 @tab_registry.register
@@ -272,14 +454,18 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._canvas_width = 680
         self._canvas_height = 420
 
-        self._projected_polygon: List[Tuple[float, float]] = []
-        self._status_var = ctk.StringVar(value="Nenhum talhão carregado.")
+        self._projected_polygon: list[tuple[float, float]] = []
+        self._projection_params: dict[str, float] | None = None
+        self._status_var = ctk.StringVar(value="Nenhum talhao carregado.")
         self._file_var = ctk.StringVar(value="")
 
-        self._area_display_var = ctk.StringVar(value="Área (ha): --")
-        self._slope_avg_display_var = ctk.StringVar(value="Aclive médio (º): --")
-        self._slope_max_display_var = ctk.StringVar(value="Aclive máximo (º): --")
-        self._slope_selected_display_var = ctk.StringVar(value="Aclive em uso (º): --")
+        self._area_display_var = ctk.StringVar(value="Area (ha): --")
+        self._slope_mediana_display_var = ctk.StringVar(value="Aclive mediano (P50 graus): --")
+        self._slope_operacional_display_var = ctk.StringVar(value="Aclive operacional (P90 graus): --")
+        self._slope_severo_display_var = ctk.StringVar(value="Aclive severo (P95 graus): --")
+        self._slope_selected_display_var = ctk.StringVar(value="Aclive em uso (graus): --")
+        self._slope_median_deg: float | None = None
+        self._operational_percentil: int = DEFAULT_OPERATIONAL_PERCENTILE
 
         self._last_slope_mode = "manual"
 
@@ -300,8 +486,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
         ctk.CTkLabel(
             mapa_card,
             text=(
-                "Carregue um arquivo .kmz contendo o polígono da área de cultivo. "
-                "O talhão será exibido abaixo e os valores de área e aclive serão "
+                "Carregue um arquivo .kmz contendo o poligono da area de cultivo. "
+                "O talhao sera exibido abaixo e os valores de area e aclive serao "
                 "preenchidos automaticamente."
             ),
             justify="left",
@@ -333,18 +519,21 @@ class EscolhaTalhaoTab(FertiMaqTab):
         ctk.CTkLabel(info_frame, textvariable=self._area_display_var, anchor="w").grid(
             row=0, column=0, sticky="ew", padx=18, pady=(12, 4)
         )
-        ctk.CTkLabel(info_frame, textvariable=self._slope_avg_display_var, anchor="w").grid(
+        ctk.CTkLabel(info_frame, textvariable=self._slope_mediana_display_var, anchor="w").grid(
             row=1, column=0, sticky="ew", padx=18, pady=4
         )
-        ctk.CTkLabel(info_frame, textvariable=self._slope_max_display_var, anchor="w").grid(
+        ctk.CTkLabel(info_frame, textvariable=self._slope_operacional_display_var, anchor="w").grid(
             row=2, column=0, sticky="ew", padx=18, pady=4
+        )
+        ctk.CTkLabel(info_frame, textvariable=self._slope_severo_display_var, anchor="w").grid(
+            row=3, column=0, sticky="ew", padx=18, pady=4
         )
         ctk.CTkLabel(
             info_frame,
             textvariable=self._slope_selected_display_var,
             anchor="w",
             font=ctk.CTkFont(weight="bold"),
-        ).grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 12))
+        ).grid(row=4, column=0, sticky="ew", padx=18, pady=(4, 12))
 
         canvas_frame = ctk.CTkFrame(mapa_card, fg_color="#ffffff", corner_radius=18)
         canvas_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 12))
@@ -362,14 +551,14 @@ class EscolhaTalhaoTab(FertiMaqTab):
         manual_card = create_card(scroll, row=1, column=0)
         manual_card.grid_columnconfigure(0, weight=1)
 
-        section_title(manual_card, "Dados manuais e seleção de aclive")
+        section_title(manual_card, "Dados manuais e selecao de aclive")
 
         ctk.CTkLabel(
             manual_card,
             text=(
-                "Caso não exista um arquivo do talhão, informe manualmente a área (ha) "
-                "e o aclive em graus. Você também pode optar por utilizar o aclive médio "
-                "ou máximo calculado a partir do mapa."
+                "Caso nao exista um arquivo do talhao, informe manualmente a area (ha) "
+                "e o aclive em graus. Voce tambem pode optar por utilizar o aclive operacional "
+                "ou severo calculado a partir do mapa."
             ),
             justify="left",
             wraplength=680,
@@ -380,12 +569,12 @@ class EscolhaTalhaoTab(FertiMaqTab):
         input_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
         input_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(input_frame, text="Área (ha)", anchor="w").grid(row=0, column=0, sticky="w", pady=6)
+        ctk.CTkLabel(input_frame, text="Area (ha)", anchor="w").grid(row=0, column=0, sticky="w", pady=6)
         ctk.CTkEntry(input_frame, textvariable=self.app.manual_area_var, placeholder_text="ex: 12.5").grid(
             row=0, column=1, sticky="ew", padx=(10, 0), pady=6
         )
 
-        ctk.CTkLabel(input_frame, text="Aclive manual (º)", anchor="w").grid(row=1, column=0, sticky="w", pady=6)
+        ctk.CTkLabel(input_frame, text="Aclive manual (graus)", anchor="w").grid(row=1, column=0, sticky="w", pady=6)
         ctk.CTkEntry(
             input_frame,
             textvariable=self.app.manual_slope_deg_var,
@@ -401,7 +590,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         ctk.CTkLabel(
             manual_card,
-            text="Escolha qual aclive utilizar nos cálculos seguintes:",
+            text="Escolha qual aclive utilizar nos calculos seguintes:",
             anchor="w",
         ).grid(row=4, column=0, sticky="ew", padx=20, pady=(18, 6))
 
@@ -410,51 +599,44 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         slope_mode_var = self.app.field_vars["slope_mode"]
 
-        manual_radio = ctk.CTkRadioButton(
+        self._radio_buttons["manual"] = ctk.CTkRadioButton(
             radio_frame,
             text="Manual",
             value="manual",
             variable=slope_mode_var,
             command=lambda: self._on_slope_mode_change("manual"),
         )
-        manual_radio.grid(row=0, column=0, padx=(0, 12), pady=4)
-        self._radio_buttons["manual"] = manual_radio
+        self._radio_buttons["manual"].grid(row=0, column=0, padx=(0, 12), pady=4)
 
-        medio_radio = ctk.CTkRadioButton(
+        self._radio_buttons["medio"] = ctk.CTkRadioButton(
             radio_frame,
-            text="Médio do mapa",
+            text=f"Operacional (P{DEFAULT_OPERATIONAL_PERCENTILE})",
             value="medio",
             variable=slope_mode_var,
             command=lambda: self._on_slope_mode_change("medio"),
         )
-        medio_radio.grid(row=0, column=1, padx=(0, 12), pady=4)
-        self._radio_buttons["medio"] = medio_radio
+        self._radio_buttons["medio"].grid(row=0, column=1, padx=(0, 12), pady=4)
 
-        maximo_radio = ctk.CTkRadioButton(
+        self._radio_buttons["maximo"] = ctk.CTkRadioButton(
             radio_frame,
-            text="Máximo do mapa",
+            text="Severo (P95)",
             value="maximo",
             variable=slope_mode_var,
             command=lambda: self._on_slope_mode_change("maximo"),
         )
-        maximo_radio.grid(row=0, column=2, padx=(0, 12), pady=4)
-        self._radio_buttons["maximo"] = maximo_radio
+        self._radio_buttons["maximo"].grid(row=0, column=2, padx=(0, 12), pady=4)
 
         mapa_card.update_idletasks()
         manual_card.update_idletasks()
 
         self.app.field_vars["area_hectares"].trace_add("write", lambda *_: self._refresh_info_labels())
-        self.app.field_vars["slope_avg_deg"].trace_add("write", lambda *_: self._on_slopes_changed())
-        self.app.field_vars["slope_max_deg"].trace_add("write", lambda *_: self._on_slopes_changed())
+        self.app.field_vars["slope_avg_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
+        self.app.field_vars["slope_max_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
         self.app.field_vars["slope_selected_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
         slope_mode_var.trace_add("write", lambda *_: self._on_mode_var_update())
 
         self._update_slope_radios()
         self._refresh_info_labels()
-
-    # ------------------------------------------------------------------ #
-    # Canvas and info updates
-    # ------------------------------------------------------------------ #
 
     def _render_canvas(self) -> None:
         if not self._canvas:
@@ -464,13 +646,13 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self._canvas.create_text(
                 self._canvas_width / 2,
                 self._canvas_height / 2,
-                text="Nenhum talhão carregado.",
+                text="Nenhum talhao carregado.",
                 fill="#9aa0ad",
                 font=("Calibri", 16, "italic"),
             )
             return
 
-        coords = _scale_to_canvas(self._projected_polygon, self._canvas_width, self._canvas_height)
+        coords = self._scale_to_canvas(self._projected_polygon, self._canvas_width, self._canvas_height)
         if not coords:
             return
 
@@ -481,26 +663,59 @@ class EscolhaTalhaoTab(FertiMaqTab):
             width=2,
         )
 
+    @staticmethod
+    def _scale_to_canvas(
+        points: Sequence[tuple[float, float]],
+        width: int,
+        height: int,
+        padding: int = 24,
+    ) -> list[float]:
+        if not points:
+            return []
+        xs = [px for px, _ in points]
+        ys = [py for _, py in points]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        span_x = max(max_x - min_x, 1.0)
+        span_y = max(max_y - min_y, 1.0)
+
+        scale = min((width - 2 * padding) / span_x, (height - 2 * padding) / span_y)
+        scale = max(scale, 0.0001)
+
+        coords: list[float] = []
+        for x, y in points:
+            cx = padding + (x - min_x) * scale
+            cy = height - (padding + (y - min_y) * scale)
+            coords.extend((cx, cy))
+        return coords
+
     def _refresh_info_labels(self) -> None:
         area_text = self.app.field_vars["area_hectares"].get()
-        avg_text = self.app.field_vars["slope_avg_deg"].get()
-        max_text = self.app.field_vars["slope_max_deg"].get()
+        operacional_text = self.app.field_vars["slope_avg_deg"].get()
+        severo_text = self.app.field_vars["slope_max_deg"].get()
         selected_text = self.app.field_vars["slope_selected_deg"].get()
         mode = self.app.field_vars["slope_mode"].get()
+        median_text = f"{self._slope_median_deg:.2f}" if self._slope_median_deg is not None else "--"
 
-        self._area_display_var.set(f"Área (ha): {area_text or '--'}")
-        self._slope_avg_display_var.set(f"Aclive médio (º): {avg_text or '--'}")
-        self._slope_max_display_var.set(f"Aclive máximo (º): {max_text or '--'}")
+        self._area_display_var.set(f"Area (ha): {area_text or '--'}")
+        self._slope_mediana_display_var.set(f"Aclive mediano (P50 graus): {median_text}")
+        self._slope_operacional_display_var.set(
+            f"Aclive operacional (P{self._operational_percentil} graus): {operacional_text or '--'}"
+        )
+        self._slope_severo_display_var.set(f"Aclive severo (P95 graus): {severo_text or '--'}")
+        if "medio" in self._radio_buttons:
+            self._radio_buttons["medio"].configure(text=f"Operacional (P{self._operational_percentil})")
 
         if selected_text:
             mode_label = {
                 "manual": "Manual",
-                "medio": "Médio do mapa",
-                "maximo": "Máximo do mapa",
+                "medio": f"Operacional (P{self._operational_percentil})",
+                "maximo": "Severo (P95)",
             }.get(mode, mode)
-            self._slope_selected_display_var.set(f"Aclive em uso ({mode_label}): {selected_text}º")
+            self._slope_selected_display_var.set(f"Aclive em uso ({mode_label}): {selected_text} graus")
         else:
-            self._slope_selected_display_var.set("Aclive em uso (º): --")
+            self._slope_selected_display_var.set("Aclive em uso (graus): --")
 
     def _update_slope_radios(self) -> None:
         has_map_slopes = bool(self.app.field_vars["slope_avg_deg"].get() or self.app.field_vars["slope_max_deg"].get())
@@ -514,17 +729,12 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._refresh_info_labels()
 
     def _on_mode_var_update(self) -> None:
-        current = self.app.field_vars["slope_mode"].get()
-        self._last_slope_mode = current
+        self._last_slope_mode = self.app.field_vars["slope_mode"].get()
         self._refresh_info_labels()
-
-    # ------------------------------------------------------------------ #
-    # Actions
-    # ------------------------------------------------------------------ #
 
     def _choose_file(self) -> None:
         filename = filedialog.askopenfilename(
-            title="Selecione o arquivo KMZ do talhão",
+            title="Selecione o arquivo KMZ do talhao",
             filetypes=[("Arquivo KMZ", "*.kmz"), ("Todos os arquivos", "*.*")],
         )
         if not filename:
@@ -533,27 +743,30 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
     def _load_kmz(self, path: Path) -> None:
         try:
-            polygon, placemark_name = _load_polygon_from_kmz(path)
-            projected = _project_points(polygon)
-            altitudes = [pt[2] for pt in polygon]
-            alt_range = max(altitudes) - min(altitudes) if altitudes else 0.0
+            polygon, placemark_name = _load_polygon(path)
+            projected, projection = _project_points(polygon)
             area_m2 = _polygon_area_m2(projected)
             area_ha = area_m2 / 10_000.0
-            avg_deg, max_deg = _slopes_from_polygon(projected, polygon)
-            slopes_available = max(avg_deg, max_deg) > 0.01 and alt_range > 0.5
+            median_deg, operational_deg, severe_deg, operational_percentil = _slopes_from_polygon(
+                projected, polygon, projection
+            )
+            slopes_available = max(operational_deg, severe_deg) > 0.05
 
             self._projected_polygon = projected
+            self._projection_params = projection
             self.app.field_vars["kmz_path"].set(path.name)
             self.app.set_field_area(area_ha, source="mapa")
             self.app.manual_area_var.set(f"{area_ha:.2f}")
             if slopes_available:
-                self.app.set_map_slopes(avg_deg, max_deg)
+                self._slope_median_deg = median_deg
+                self._operational_percentil = operational_percentil
+                self.app.set_map_slopes(operational_deg, severe_deg)
+                self.app.preset_manual_slope(operational_deg)
             else:
+                self._slope_median_deg = None
+                self._operational_percentil = DEFAULT_OPERATIONAL_PERCENTILE
                 self.app.clear_map_slopes()
-            if slopes_available:
-                self.app.manual_slope_deg_var.set(f"{avg_deg:.2f}")
-            else:
-                self.app.manual_slope_deg_var.set("")
+                self.app.clear_manual_slope()
 
             self._render_canvas()
             self._refresh_info_labels()
@@ -562,29 +775,32 @@ class EscolhaTalhaoTab(FertiMaqTab):
             if slopes_available and self.app.apply_slope_mode("medio"):
                 self.app.field_vars["slope_mode"].set("medio")
                 self._status_label.configure(text_color="#3f7e2d")
-                self._status_var.set("Talhão carregado com sucesso. Aclive médio aplicado.")
+                self._status_var.set(
+                    f"Talhao carregado. Aclive operacional (P{self._operational_percentil}) aplicado: "
+                    f"{operational_deg:.2f} graus."
+                )
             else:
                 self.app.field_vars["slope_mode"].set("manual")
                 self.app.field_vars["slope_selected_deg"].set("")
                 self._status_label.configure(text_color="#b36b00")
-                motivo = (
-                    "Arquivo KMZ não possui dados de altitude para o polígono."
-                    if alt_range <= 0.5
-                    else "Diferença de altitude insuficiente para calcular o aclive."
+                self._status_var.set(
+                    "Nao foi possivel calcular o aclive automaticamente. Informe o valor manualmente."
                 )
-                self._status_var.set(f"{motivo} Informe o aclive manualmente.")
-                self.app.field_vars["slope_mode"].set("manual")
 
             self._update_slope_radios()
 
         except Exception as exc:
             self._projected_polygon = []
+            self._projection_params = None
+            self._slope_median_deg = None
+            self._operational_percentil = DEFAULT_OPERATIONAL_PERCENTILE
             self._render_canvas()
             self.app.field_vars["kmz_path"].set("")
             self._status_label.configure(text_color="#b00020")
-            self._status_var.set(f"Falha ao carregar talhão: {exc}")
+            self._status_var.set(f"Falha ao carregar talhao: {exc}")
             self._file_var.set("")
             self.app.clear_map_slopes()
+            self.app.clear_manual_slope()
             self._update_slope_radios()
             self._refresh_info_labels()
 
@@ -594,22 +810,22 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         try:
             if not area_txt:
-                raise ValueError("Informe a área em hectares.")
+                raise ValueError("Informe a area em hectares.")
             if not slope_txt:
                 raise ValueError("Informe o aclive manual em graus.")
 
             area = float(area_txt)
             slope_deg = float(slope_txt)
             if area <= 0:
-                raise ValueError("A área deve ser maior que zero.")
+                raise ValueError("A area deve ser maior que zero.")
             if not (0 <= slope_deg < 90):
-                raise ValueError("O aclive deve estar entre 0º e 90º.")
+                raise ValueError("O aclive deve estar entre 0 e 90 graus.")
 
             self.app.set_manual_area(area)
             self.app.set_manual_slope(slope_deg)
 
             self._status_label.configure(text_color="#3f7e2d")
-            self._status_var.set("Valores manuais aplicados ao cálculo.")
+            self._status_var.set("Valores manuais aplicados ao calculo.")
             self._refresh_info_labels()
             self._update_slope_radios()
 
@@ -621,10 +837,10 @@ class EscolhaTalhaoTab(FertiMaqTab):
         if not self.app.apply_slope_mode(mode):
             self.app.field_vars["slope_mode"].set(self._last_slope_mode)
             self._status_label.configure(text_color="#b00020")
-            self._status_var.set("Seleção indisponível: informe o valor correspondente.")
+            self._status_var.set("Selecao indisponivel: informe o valor correspondente.")
             return
 
         self._last_slope_mode = mode
         self._status_label.configure(text_color="#3d4e8a")
-        self._status_var.set("Aclive atualizado para uso nas próximas abas.")
+        self._status_var.set("Aclive atualizado para uso nas proximas abas.")
         self._refresh_info_labels()

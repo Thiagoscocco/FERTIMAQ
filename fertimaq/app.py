@@ -180,6 +180,10 @@ class FertiMaqApp:
         self.manual_slope_deg_var.set(f"{slope_deg:.2f}")
         self.apply_slope_mode("manual")
 
+    def preset_manual_slope(self, slope_deg: float) -> None:
+        self._manual_slope_deg = slope_deg
+        self.manual_slope_deg_var.set(f"{slope_deg:.2f}")
+
     def set_manual_area(self, hectares: float) -> None:
         self.manual_area_var.set(f"{hectares:.2f}")
         self.set_field_area(hectares, source="manual")
