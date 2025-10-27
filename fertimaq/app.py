@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from typing import Dict, Mapping, Sequence
 
+import math
+import sys
+from pathlib import Path
+
 import customtkinter as ctk
+
+if __package__ in {None, ""}:
+    ROOT = Path(__file__).resolve().parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
 from ferticalc_ui_blueprint import (
     SPACING,
@@ -18,7 +27,10 @@ from ferticalc_ui_blueprint import (
 )
 from logica_calc import Inputs, Preparo, Results, Solo, Sulcador, calcular
 
-from .tabs import FertiMaqTab, tab_registry
+if __package__ in {None, ""}:
+    from fertimaq.tabs import FertiMaqTab, tab_registry  # type: ignore
+else:
+    from .tabs import FertiMaqTab, tab_registry
 
 
 class FertiMaqApp:
@@ -72,6 +84,23 @@ class FertiMaqApp:
             "atende": ctk.StringVar(value="--"),
         }
 
+        self.field_vars: Dict[str, ctk.StringVar] = {
+            "kmz_path": ctk.StringVar(value=""),
+            "area_hectares": ctk.StringVar(value=""),
+            "area_source": ctk.StringVar(value="manual"),
+            "slope_avg_deg": ctk.StringVar(value=""),
+            "slope_max_deg": ctk.StringVar(value=""),
+            "slope_selected_deg": ctk.StringVar(value=""),
+            "slope_mode": ctk.StringVar(value="manual"),
+        }
+        self.manual_area_var = ctk.StringVar(value="")
+        self.manual_slope_deg_var = ctk.StringVar(value="")
+
+        self._field_area_value: float | None = None
+        self._field_slope_avg_deg: float | None = None
+        self._field_slope_max_deg: float | None = None
+        self._manual_slope_deg: float | None = None
+
         self._tabs: Dict[str, FertiMaqTab] = {}
         self._tab_titles: Dict[str, str] = {}
 
@@ -79,7 +108,6 @@ class FertiMaqApp:
 
         footer = footer_spec or FooterSpec(text="FertiMaq - Modular Prototype")
         self.footer = footer_label(self.container, spec=footer)
-        self.footer.grid_configure(pady=SPACING["footer"]["pady"])
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -97,6 +125,7 @@ class FertiMaqApp:
             instance = tab_cls(self)
             frame = tabview.tab(tab_cls.title)
             frame.grid_columnconfigure(0, weight=1)
+            frame.grid_rowconfigure(0, weight=1)
             instance.build(frame)
             self._tabs[instance.tab_id] = instance
             self._tab_titles[instance.tab_id] = instance.title
@@ -116,6 +145,68 @@ class FertiMaqApp:
         tab = self._tabs.get(tab_id)
         if tab:
             tab.on_show()
+
+    # ------------------------------------------------------------------ #
+    # Field data helpers
+    # ------------------------------------------------------------------ #
+
+    def set_field_area(self, hectares: float, *, source: str) -> None:
+        self._field_area_value = hectares
+        self.field_vars["area_hectares"].set(f"{hectares:.2f}")
+        self.field_vars["area_source"].set(source)
+        if source == "manual":
+            self.manual_area_var.set(f"{hectares:.2f}")
+
+    def set_map_slopes(self, average_deg: float, maximum_deg: float) -> None:
+        self._field_slope_avg_deg = average_deg
+        self._field_slope_max_deg = maximum_deg
+        self.field_vars["slope_avg_deg"].set(f"{average_deg:.2f}")
+        self.field_vars["slope_max_deg"].set(f"{maximum_deg:.2f}")
+
+    def clear_map_slopes(self) -> None:
+        self._field_slope_avg_deg = None
+        self._field_slope_max_deg = None
+        self.field_vars["slope_avg_deg"].set("")
+        self.field_vars["slope_max_deg"].set("")
+        if self.field_vars["slope_mode"].get() in {"medio", "maximo"}:
+            if self._manual_slope_deg is not None:
+                self.apply_slope_mode("manual")
+            else:
+                self.field_vars["slope_mode"].set("manual")
+                self.field_vars["slope_selected_deg"].set("")
+
+    def set_manual_slope(self, slope_deg: float) -> None:
+        self._manual_slope_deg = slope_deg
+        self.manual_slope_deg_var.set(f"{slope_deg:.2f}")
+        self.apply_slope_mode("manual")
+
+    def set_manual_area(self, hectares: float) -> None:
+        self.manual_area_var.set(f"{hectares:.2f}")
+        self.set_field_area(hectares, source="manual")
+
+    def apply_slope_mode(self, mode: str) -> bool:
+        slope_deg: float | None
+        if mode == "medio":
+            slope_deg = self._field_slope_avg_deg
+        elif mode == "maximo":
+            slope_deg = self._field_slope_max_deg
+        elif mode == "manual":
+            slope_deg = self._manual_slope_deg
+        else:
+            slope_deg = None
+
+        if slope_deg is None:
+            return False
+
+        percent = math.tan(math.radians(slope_deg)) * 100.0
+        self.field_vars["slope_mode"].set(mode)
+        self.field_vars["slope_selected_deg"].set(f"{slope_deg:.2f}")
+        self.input_vars["aclive_percent"].set(f"{percent:.2f}")
+        return True
+
+    def clear_manual_slope(self) -> None:
+        self._manual_slope_deg = None
+        self.manual_slope_deg_var.set("")
 
     # ------------------------------------------------------------------ #
     # Calculation pipeline shared with tabs
