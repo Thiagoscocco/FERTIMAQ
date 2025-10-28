@@ -631,6 +631,9 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._loading_frame: ctk.CTkFrame | None = None
         self._loading_bar: ctk.CTkProgressBar | None = None
         self._loading_after_id: str | None = None
+        self._summary_toggle_var = ctk.StringVar(value="Demais aclives [+]")
+        self._summary_extra_frame: ctk.CTkFrame | None = None
+        self._summary_extra_visible = False
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -739,32 +742,55 @@ class EscolhaTalhaoTab(FertiMaqTab):
             textvariable=self._area_display_var,
             anchor="w",
             text_color="#eef1fb",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkLabel(
-            summary_body,
-            textvariable=self._slope_mean_display_var,
-            anchor="w",
-            text_color="#eef1fb",
-        ).grid(row=1, column=0, sticky="ew", pady=8)
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkLabel(
             summary_body,
             textvariable=self._slope_mode_display_var,
             anchor="w",
+            text_color="#d4dcff",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 12))
+
+        toggle_frame = ctk.CTkFrame(summary_body, fg_color="#2a3142", corner_radius=12)
+        toggle_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        toggle_frame.grid_columnconfigure(0, weight=1)
+        toggle_frame.configure(cursor="hand2")
+        toggle_label = ctk.CTkLabel(
+            toggle_frame,
+            textvariable=self._summary_toggle_var,
+            anchor="w",
             text_color="#eef1fb",
-        ).grid(row=2, column=0, sticky="ew", pady=8)
+            font=ctk.CTkFont(weight="bold"),
+        )
+        toggle_label.grid(row=0, column=0, sticky="ew", padx=12, pady=6)
+        toggle_frame.bind("<Button-1>", self._toggle_summary_extra)
+        toggle_label.bind("<Button-1>", self._toggle_summary_extra)
+
+        self._summary_extra_frame = ctk.CTkFrame(summary_body, fg_color="#1f2330", corner_radius=12)
+        self._summary_extra_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        self._summary_extra_frame.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            summary_body,
+            self._summary_extra_frame,
+            textvariable=self._slope_mean_display_var,
+            anchor="w",
+            text_color="#eef1fb",
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 4))
+        ctk.CTkLabel(
+            self._summary_extra_frame,
             textvariable=self._slope_max_display_var,
             anchor="w",
             text_color="#eef1fb",
-        ).grid(row=3, column=0, sticky="ew", pady=8)
+        ).grid(row=1, column=0, sticky="ew", padx=12, pady=4)
         ctk.CTkLabel(
-            summary_body,
+            self._summary_extra_frame,
             textvariable=self._slope_selected_display_var,
             anchor="w",
             text_color="#d8def4",
             font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        ).grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
+        self._set_summary_extra_visible(False)
 
         ctk.CTkLabel(
             summary_card,
@@ -853,37 +879,39 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("manual"),
         )
-        self._radio_buttons["manual"].grid(row=0, column=0, padx=(0, 12), pady=4)
+        for col in range(4):
+            radio_frame.grid_columnconfigure(col, weight=1)
+        self._radio_buttons["manual"].grid(row=0, column=0, padx=(0, 12), pady=4, sticky="ew")
 
         self._radio_buttons["medio"] = ctk.CTkRadioButton(
             radio_frame,
-            text="Medio (P50)",
+            text="Medio",
             value="medio",
             variable=slope_mode_var,
             text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("medio"),
         )
-        self._radio_buttons["medio"].grid(row=0, column=1, padx=(0, 12), pady=4)
+        self._radio_buttons["medio"].grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
 
         self._radio_buttons["frequente"] = ctk.CTkRadioButton(
             radio_frame,
-            text="Frequente (modo)",
+            text="Frequente",
             value="frequente",
             variable=slope_mode_var,
             text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("frequente"),
         )
-        self._radio_buttons["frequente"].grid(row=0, column=2, padx=(0, 12), pady=4)
+        self._radio_buttons["frequente"].grid(row=0, column=2, padx=(0, 12), pady=4, sticky="ew")
 
         self._radio_buttons["maximo"] = ctk.CTkRadioButton(
             radio_frame,
-            text="Maximo (P95)",
+            text="Maximo",
             value="maximo",
             variable=slope_mode_var,
             text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("maximo"),
         )
-        self._radio_buttons["maximo"].grid(row=0, column=3, padx=(0, 12), pady=4)
+        self._radio_buttons["maximo"].grid(row=0, column=3, padx=(0, 12), pady=4, sticky="ew")
 
         mapa_card.update_idletasks()
         manual_card.update_idletasks()
@@ -891,6 +919,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self.app.field_vars["area_hectares"].trace_add("write", lambda *_: self._refresh_info_labels())
         self.app.field_vars["slope_avg_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
         self.app.field_vars["slope_max_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
+        self.app.field_vars["slope_mode_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
         self.app.field_vars["slope_selected_deg"].trace_add("write", lambda *_: self._refresh_info_labels())
         slope_mode_var.trace_add("write", lambda *_: self._on_mode_var_update())
 
@@ -980,18 +1009,18 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._slope_max_display_var.set(f"Aclive maximo (P95 graus): {max_text}")
 
         if 'medio' in self._radio_buttons:
-            self._radio_buttons['medio'].configure(text='Medio (P50)')
+            self._radio_buttons['medio'].configure(text='Medio')
         if 'frequente' in self._radio_buttons:
-            self._radio_buttons['frequente'].configure(text='Frequente (modo)')
+            self._radio_buttons['frequente'].configure(text='Frequente')
         if 'maximo' in self._radio_buttons:
-            self._radio_buttons['maximo'].configure(text='Maximo (P95)')
+            self._radio_buttons['maximo'].configure(text='Maximo')
 
         if selected_text:
             mode_label = {
                 'manual': 'Manual',
-                'medio': 'Medio (P50)',
-                'frequente': 'Frequente (modo)',
-                'maximo': 'Maximo (P95)',
+                'medio': 'Medio',
+                'frequente': 'Frequente',
+                'maximo': 'Maximo',
             }.get(mode, mode)
             self._slope_selected_display_var.set(f"Aclive em uso ({mode_label}): {selected_text} graus")
         else:
@@ -1003,6 +1032,21 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self._correction_message_var.set('')
 
         self._render_canvas()
+        self._set_summary_extra_visible(self._summary_extra_visible)
+
+    def _toggle_summary_extra(self, _event=None) -> None:
+        self._set_summary_extra_visible(not self._summary_extra_visible)
+
+    def _set_summary_extra_visible(self, visible: bool) -> None:
+        self._summary_extra_visible = visible
+        symbol = "[-]" if visible else "[+]"
+        self._summary_toggle_var.set(f"Demais aclives {symbol}")
+        if self._summary_extra_frame is None:
+            return
+        if visible:
+            self._summary_extra_frame.grid()
+        else:
+            self._summary_extra_frame.grid_remove()
 
     def _update_slope_radios(self) -> None:
         has_mean_max = bool(self.app.field_vars["slope_avg_deg"].get() or self.app.field_vars["slope_max_deg"].get())
@@ -1133,6 +1177,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
             self._update_slope_radios()
             self._refresh_manual_button_state()
+            self._set_summary_extra_visible(False)
             self._finish_loading_indicator("Talhao carregado com sucesso!", success=True)
 
         except Exception as exc:
@@ -1153,6 +1198,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self.app.clear_map_slopes()
             self.app.clear_manual_slope()
             self._update_slope_radios()
+            self._set_summary_extra_visible(False)
             self._refresh_info_labels()
             self._refresh_manual_button_state()
 
