@@ -258,7 +258,6 @@ class FertiMaqApp:
 
         self.status_var.set("Calculo executado com sucesso.")
         self._update_results(resultado)
-        self.show_tab("calculo_resultados")
 
     # ------------------------------------------------------------------ #
     # Helpers
