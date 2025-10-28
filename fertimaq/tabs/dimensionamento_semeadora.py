@@ -34,10 +34,12 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         # Result vars
         self._status_var = ctk.StringVar(value="Informe os dados e calcule o dimensionamento.")
         self._peso_semeadora_var = ctk.StringVar(value="--")
+        self._peso_trator_var = ctk.StringVar(value="--")
         self._peso_conjunto_var = ctk.StringVar(value="--")
         self._cv_com_aclive_var = ctk.StringVar(value="--")
         self._cv_plano_var = ctk.StringVar(value="--")
         self._status_label_ref: ctk.CTkLabel | None = None
+        self._limite_aclive_var = ctk.StringVar(value="")
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -177,9 +179,10 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         results_frame.grid_columnconfigure(1, weight=1)
 
         self._add_result_row(results_frame, 0, "Peso da semeadora (t)", self._peso_semeadora_var)
-        self._add_result_row(results_frame, 1, "Peso do conjunto (t)", self._peso_conjunto_var)
-        self._add_result_row(results_frame, 2, "CV necessario (com aclive)", self._cv_com_aclive_var)
-        self._add_result_row(results_frame, 3, "CV necessario (terreno plano)", self._cv_plano_var)
+        self._add_result_row(results_frame, 1, "Peso do trator (t)", self._peso_trator_var)
+        self._add_result_row(results_frame, 2, "Peso do conjunto (t)", self._peso_conjunto_var)
+        self._add_result_row(results_frame, 3, "CV necessario (com aclive)", self._cv_com_aclive_var)
+        self._add_result_row(results_frame, 4, "CV necessario (terreno plano)", self._cv_plano_var)
 
         recomendacao_card = create_card(
             bottom_row,
@@ -198,7 +201,16 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             anchor="w",
             wraplength=320,
             justify="left",
-        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 16))
+        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 6))
+
+        ctk.CTkLabel(
+            recomendacao_card,
+            textvariable=self._limite_aclive_var,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+            text_color="#e0c060",
+        ).grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 16))
 
         # React to slope changes
         self.app.field_vars["slope_selected_deg"].trace_add("write", lambda *_: self._refresh_aclive_label())
@@ -268,12 +280,21 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
 
         peso_conjunto = resultado.peso_semeadora_t + resultado.peso_trator_t
         self._peso_semeadora_var.set(f"{resultado.peso_semeadora_t:,.2f}".replace(",", "."))
+        self._peso_trator_var.set(f"{resultado.peso_trator_t:,.2f}".replace(",", "."))
         self._peso_conjunto_var.set(f"{peso_conjunto:,.2f}".replace(",", "."))
         self._cv_com_aclive_var.set(f"{resultado.cv_requerido:,.2f}".replace(",", "."))
         self._cv_plano_var.set(f"{plano.cv_requerido:,.2f}".replace(",", "."))
 
-        recomendacao = self._gerar_recomendacao(resultado, plano, cv_disponivel, linhas, velocidade)
+        recomendacao, limite_info = self._gerar_recomendacao(
+            resultado,
+            plano,
+            cv_disponivel,
+            linhas,
+            velocidade,
+            aclive_percent,
+        )
         self._recomendacao_var.set(recomendacao)
+        self._limite_aclive_var.set(limite_info)
 
     def _gerar_recomendacao(
         self,
@@ -282,25 +303,50 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         cv_disponivel: float,
         linhas: int,
         velocidade_kmh: float,
-    ) -> str:
+        aclive_percent: float,
+    ) -> tuple[str, str]:
         deficit = resultado.cv_requerido - cv_disponivel
         if deficit <= 0:
-            return "O conjunto consegue atender a velocidade necessaria para a operacao."
+            return "O conjunto consegue atender a velocidade necessaria para a operacao.", ""
 
         if deficit > 25:
+            limite_msg = self._slope_limite_mensagem(plano.cv_requerido, resultado.cv_requerido, cv_disponivel, aclive_percent)
             return (
                 "O trator atual nao atende. Considere reduzir o numero de linhas da semeadora "
-                "ou utilizar um trator mais potente."
+                "ou utilizar um trator mais potente.",
+                limite_msg,
             )
 
         # deficit <= 25: sugerir reduzir velocidade.
         # cv requerido proporcional a velocidade (kW cresce proporcionalmente). Ajuste multiplicativo:
         velocidade_sugerida = max(1.0, velocidade_kmh * (cv_disponivel / resultado.cv_requerido))
         velocidade_sugerida = round(velocidade_sugerida, 2)
+        limite_msg = self._slope_limite_mensagem(plano.cv_requerido, resultado.cv_requerido, cv_disponivel, aclive_percent)
         return (
             "O trator atende se a velocidade for reduzida. "
-            f"Sugestao: operar a aproximadamente {velocidade_sugerida} km/h."
+            f"Sugestao: operar a aproximadamente {velocidade_sugerida} km/h.",
+            limite_msg,
         )
+
+    def _slope_limite_mensagem(
+        self,
+        cv_plano: float,
+        cv_total: float,
+        cv_disponivel: float,
+        aclive_percent: float,
+    ) -> str:
+        extra_atual = max(cv_total - cv_plano, 0.0)
+        extra_disponivel = max(cv_disponivel - cv_plano, 0.0)
+        if extra_atual <= 1e-6 or extra_disponivel <= 0.0 or aclive_percent <= 0.0:
+            return ""
+
+        proporcao = max(0.0, min(extra_disponivel / extra_atual, 1.0))
+        limite_pct = aclive_percent * proporcao
+        if limite_pct <= 0.0:
+            return ""
+
+        limite_deg = math.degrees(math.atan(limite_pct / 100.0))
+        return f"Esse conjunto responderia bem em aclives de ate {limite_deg:.1f} graus nessa velocidade."
 
     def _status_var_callback(self, *, error: bool) -> None:
         if error:
