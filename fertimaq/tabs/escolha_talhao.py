@@ -488,8 +488,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
     def __init__(self, app: "FertiMaqApp") -> None:
         super().__init__(app)
-        self._canvas_width = 680
-        self._canvas_height = 420
+        self._canvas_width = 620
+        self._canvas_height = 620
 
         self._projected_polygon: list[tuple[float, float]] = []
         self._projection_params: Dict[str, float] | None = None
@@ -554,36 +554,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text_color="#3d4e8a",
         ).grid(row=4, column=0, sticky="ew", padx=20, pady=(6, 12))
 
-        info_frame = ctk.CTkFrame(mapa_card, fg_color="#e4e7f5", corner_radius=14)
-        info_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 12))
-        info_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(info_frame, textvariable=self._area_display_var, anchor="w", text_color="#1f2d4d").grid(
-            row=0, column=0, sticky="ew", padx=18, pady=(12, 4)
-        )
-        ctk.CTkLabel(info_frame, textvariable=self._slope_mean_display_var, anchor="w", text_color="#1f2d4d").grid(
-            row=1, column=0, sticky="ew", padx=18, pady=4
-        )
-        ctk.CTkLabel(info_frame, textvariable=self._slope_max_display_var, anchor="w", text_color="#1f2d4d").grid(
-            row=2, column=0, sticky="ew", padx=18, pady=4
-        )
-        ctk.CTkLabel(
-            info_frame,
-            textvariable=self._slope_selected_display_var,
-            anchor="w",
-            font=ctk.CTkFont(weight="bold"),
-        ).grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 8))
-
-        ctk.CTkLabel(
-            mapa_card,
-            textvariable=self._correction_message_var,
-            anchor="w",
-            text_color="#a65b1f",
-            font=ctk.CTkFont(size=12, slant="italic"),
-        ).grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 10))
-
         canvas_frame = ctk.CTkFrame(mapa_card, fg_color="#ffffff", corner_radius=18)
-        canvas_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 16))
+        canvas_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 20))
 
         self._canvas = tk.Canvas(
             canvas_frame,
@@ -592,9 +564,69 @@ class EscolhaTalhaoTab(FertiMaqTab):
             background="#ffffff",
             highlightthickness=0,
         )
-        self._canvas.grid(row=0, column=0, padx=16, pady=16)
+        self._canvas.grid(row=0, column=0, padx=18, pady=18)
 
-        manual_card = create_card(scroll, row=1, column=0)
+        cards_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        cards_row.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        for col in (0, 1):
+            cards_row.grid_columnconfigure(col, weight=1, uniform="cards")
+
+        summary_card = create_card(
+            cards_row,
+            row=0,
+            column=0,
+            sticky="nsew",
+            padding={"padx": (0, 10), "pady": (0, 0)},
+        )
+        summary_card.configure(fg_color="#343a46")
+        section_title(summary_card, "Resumo do talhao")
+
+        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 12))
+        summary_body.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            summary_body,
+            textvariable=self._area_display_var,
+            anchor="w",
+            text_color="#eef1fb",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkLabel(
+            summary_body,
+            textvariable=self._slope_mean_display_var,
+            anchor="w",
+            text_color="#eef1fb",
+        ).grid(row=1, column=0, sticky="ew", pady=8)
+        ctk.CTkLabel(
+            summary_body,
+            textvariable=self._slope_max_display_var,
+            anchor="w",
+            text_color="#eef1fb",
+        ).grid(row=2, column=0, sticky="ew", pady=8)
+        ctk.CTkLabel(
+            summary_body,
+            textvariable=self._slope_selected_display_var,
+            anchor="w",
+            text_color="#d8def4",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+
+        ctk.CTkLabel(
+            summary_card,
+            textvariable=self._correction_message_var,
+            anchor="w",
+            text_color="#f4c577",
+            font=ctk.CTkFont(size=12, slant="italic"),
+        ).grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 16))
+
+        manual_card = create_card(
+            cards_row,
+            row=0,
+            column=1,
+            sticky="nsew",
+            padding={"padx": (10, 0), "pady": (0, 0)},
+        )
+        manual_card.configure(fg_color="#343a46")
         manual_card.grid_columnconfigure(0, weight=1)
 
         section_title(manual_card, "Dados manuais e selecao de aclive")
@@ -603,28 +635,36 @@ class EscolhaTalhaoTab(FertiMaqTab):
             manual_card,
             text=(
                 "Caso nao exista um arquivo do talhao, informe manualmente a area (ha) "
-                "e o aclive em graus. Voce tambem pode optar por utilizar o aclive operacional "
-                "ou severo calculado a partir do mapa."
+                "e o aclive em graus. Voce tambem pode optar pelos valores calculados acima."
             ),
             justify="left",
-            wraplength=680,
+            wraplength=320,
             anchor="w",
-        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(4, 12))
+            text_color="#cfd7f2",
+        ).grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 14))
 
         input_frame = ctk.CTkFrame(manual_card, fg_color="transparent")
-        input_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
+        input_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 14))
         input_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(input_frame, text="Area (ha)", anchor="w").grid(row=0, column=0, sticky="w", pady=6)
-        ctk.CTkEntry(input_frame, textvariable=self.app.manual_area_var, placeholder_text="ex: 12.5").grid(
-            row=0, column=1, sticky="ew", padx=(10, 0), pady=6
+        ctk.CTkLabel(input_frame, text="Area (ha)", anchor="w", text_color="#eef1fb").grid(
+            row=0, column=0, sticky="w", pady=6
         )
+        ctk.CTkEntry(
+            input_frame,
+            textvariable=self.app.manual_area_var,
+            placeholder_text="ex: 12.5",
+            width=140,
+        ).grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=6)
 
-        ctk.CTkLabel(input_frame, text="Aclive manual (graus)", anchor="w").grid(row=1, column=0, sticky="w", pady=6)
+        ctk.CTkLabel(input_frame, text="Aclive manual (graus)", anchor="w", text_color="#eef1fb").grid(
+            row=1, column=0, sticky="w", pady=6
+        )
         ctk.CTkEntry(
             input_frame,
             textvariable=self.app.manual_slope_deg_var,
             placeholder_text="ex: 12.0",
+            width=140,
         ).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=6)
 
         primary_button(
@@ -638,7 +678,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
             manual_card,
             text="Escolha qual aclive utilizar nos calculos seguintes:",
             anchor="w",
-        ).grid(row=4, column=0, sticky="ew", padx=20, pady=(18, 6))
+            text_color="#eef1fb",
+        ).grid(row=4, column=0, sticky="ew", padx=20, pady=(18, 8))
 
         radio_frame = ctk.CTkFrame(manual_card, fg_color="transparent")
         radio_frame.grid(row=5, column=0, sticky="w", padx=20, pady=(0, 12))
@@ -650,6 +691,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text="Manual",
             value="manual",
             variable=slope_mode_var,
+            text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("manual"),
         )
         self._radio_buttons["manual"].grid(row=0, column=0, padx=(0, 12), pady=4)
@@ -659,6 +701,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text="Medio (P50)",
             value="medio",
             variable=slope_mode_var,
+            text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("medio"),
         )
         self._radio_buttons["medio"].grid(row=0, column=1, padx=(0, 12), pady=4)
@@ -668,6 +711,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text="Maximo (P95)",
             value="maximo",
             variable=slope_mode_var,
+            text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("maximo"),
         )
         self._radio_buttons["maximo"].grid(row=0, column=2, padx=(0, 12), pady=4)
@@ -728,7 +772,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
         points: Sequence[tuple[float, float]],
         width: int,
         height: int,
-        padding: int = 24,
+        padding: int = 18,
     ) -> list[float]:
         if not points:
             return []
