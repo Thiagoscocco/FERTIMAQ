@@ -109,8 +109,9 @@ def calc_peso_semeadora_t(linhas: int) -> float:
 
 
 def calc_peso_trator_t(cv_trator: float) -> float:
-    """Equivalente a F8 = (C12 * 60) / 1000 (t), usando 60 kg/cv."""
-    return (cv_trator * 60.0) / 1000.0
+    """Peso estimado do trator (t) usando 55 kg/cv ate 110 cv, depois 50 kg/cv."""
+    fator_kg_por_cv = 55.0 if cv_trator <= 110.0 else 50.0
+    return (cv_trator * fator_kg_por_cv) / 1000.0
 
 
 def calc_acrescimo_aclive_N(aclive_percent: float, peso_semeadora_t: float, peso_trator_t: float) -> float:

@@ -285,21 +285,21 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
     ) -> str:
         deficit = resultado.cv_requerido - cv_disponivel
         if deficit <= 0:
-            return "O conjunto consegue atender a velocidade necessária para a operação."
+            return "O conjunto consegue atender a velocidade necessaria para a operacao."
 
         if deficit > 25:
             return (
-                "O trator atual não atende. Considere reduzir o número de linhas da semeadora "
+                "O trator atual nao atende. Considere reduzir o numero de linhas da semeadora "
                 "ou utilizar um trator mais potente."
             )
 
         # deficit <= 25: sugerir reduzir velocidade.
-        # cv requerido proporcional à velocidade (kW ∝ velocidade). ajuste multiplicativo:
+        # cv requerido proporcional a velocidade (kW cresce proporcionalmente). Ajuste multiplicativo:
         velocidade_sugerida = max(1.0, velocidade_kmh * (cv_disponivel / resultado.cv_requerido))
         velocidade_sugerida = round(velocidade_sugerida, 2)
         return (
             "O trator atende se a velocidade for reduzida. "
-            f"Sugestão: operar a aproximadamente {velocidade_sugerida} km/h."
+            f"Sugestao: operar a aproximadamente {velocidade_sugerida} km/h."
         )
 
     def _status_var_callback(self, *, error: bool) -> None:
@@ -316,3 +316,4 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._refresh_aclive_label()
         if self._status_label_ref is not None and self._status_var.get() == "Informe os dados e calcule o dimensionamento.":
             self._status_label_ref.configure(text_color="#666666")
+

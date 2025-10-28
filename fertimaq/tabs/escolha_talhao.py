@@ -1,4 +1,4 @@
-﻿"""Tab responsible for loading field polygons and computing slope metrics."""
+"""Tab responsible for loading field polygons and computing slope metrics."""
 
 from __future__ import annotations
 
@@ -842,6 +842,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         self._update_slope_radios()
         self._refresh_info_labels()
+        self._refresh_manual_button_state()
 
     # ------------------------------------------------------------------ #
     # Rendering helpers                                                  #
@@ -948,6 +949,14 @@ class EscolhaTalhaoTab(FertiMaqTab):
         for key in ("medio", "maximo"):
             self._radio_buttons[key].configure(state=state)
         self._radio_buttons["manual"].configure(state="normal")
+        self._refresh_manual_button_state()
+
+    def _refresh_manual_button_state(self) -> None:
+        if not self._manual_calc_button:
+            return
+        mode = self.app.field_vars["slope_mode"].get()
+        state = "normal" if mode == "manual" else "disabled"
+        self._manual_calc_button.configure(state=state)
 
     def _on_slopes_changed(self) -> None:
         self._update_slope_radios()
@@ -956,6 +965,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
     def _on_mode_var_update(self) -> None:
         self._last_slope_mode = self.app.field_vars["slope_mode"].get()
         self._refresh_info_labels()
+        self._refresh_manual_button_state()
 
     # ------------------------------------------------------------------ #
     # Event handlers                                                     #
@@ -988,8 +998,6 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self.app.field_vars["kmz_path"].set(path.name)
             self.app.set_field_area(area_ha, source="mapa")
             self.app.manual_area_var.set(f"{area_ha:.2f}")
-            if self._manual_calc_button is not None:
-                self._manual_calc_button.configure(state="disabled")
             if slopes_available:
                 self._slope_mean_deg = mean_deg
                 self._correction_active = correction_applied
@@ -1020,6 +1028,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
                 )
 
             self._update_slope_radios()
+            self._refresh_manual_button_state()
 
         except Exception as exc:
             self._projected_polygon = []
@@ -1037,20 +1046,13 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self._file_var.set("")
             self.app.clear_map_slopes()
             self.app.clear_manual_slope()
-            if self._manual_calc_button is not None:
-                self._manual_calc_button.configure(state="normal")
             self._update_slope_radios()
             self._refresh_info_labels()
+            self._refresh_manual_button_state()
 
     def _apply_manual_values(self) -> None:
         area_text = (self.app.manual_area_var.get() or "").strip().replace(",", ".")
         slope_text = (self.app.manual_slope_deg_var.get() or "").strip().replace(",", ".")
-
-        if self._projected_polygon:
-            if self._status_label:
-                self._status_label.configure(text_color="#b00020")
-            self._status_var.set("Para usar o modo manual, remova o talhao carregado.")
-            return
 
         try:
             if not area_text:
@@ -1068,12 +1070,16 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self.app.set_manual_area(area)
             self.app.set_manual_slope(slope_deg)
             self._correction_active = False
+            self.app.field_vars["slope_mode"].set("manual")
+            if not self.app.apply_slope_mode("manual"):
+                raise ValueError("Nao foi possivel aplicar o modo manual.")
 
             if self._status_label:
                 self._status_label.configure(text_color="#3f7e2d")
             self._status_var.set("Valores manuais aplicados ao calculo.")
             self._refresh_info_labels()
             self._update_slope_radios()
+            self._refresh_manual_button_state()
 
         except ValueError as exc:
             if self._status_label:
@@ -1097,3 +1103,4 @@ class EscolhaTalhaoTab(FertiMaqTab):
             if selected_value:
                 self.app.manual_slope_deg_var.set(selected_value)
         self._refresh_info_labels()
+        self._refresh_manual_button_state()
