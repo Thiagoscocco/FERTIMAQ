@@ -1,4 +1,4 @@
-"""CLI para calcular o aclive operacional de um talhão usando DEM local.
+﻿"""CLI para calcular o aclive operacional de um talhão usando DEM local.
 
 Implementa o pipeline solicitado:
 1. Leitura do KMZ/KML (com suporte a KMZ comprimido).
@@ -44,10 +44,10 @@ from shapely.validation import make_valid
 
 LOGGER = logging.getLogger("aclives")
 DEFAULT_PERCENTIL = 80
-FALLBACK_PERCENTIL = 70
+FALLBACK_PERCENTILE = 70
 MAX_OPERATIONAL_DEG = 15.0
 DEFAULT_ALPHA_GRAUS = 30.0
-DEFAULT_JANELA_M = 75.0
+DEFAULT_JANELA_M = 50.0
 DEFAULT_BUFFER_BORDA_M = 15.0
 
 
@@ -233,6 +233,10 @@ def _compute_slope_percent(grid: "DemGrid") -> np.ndarray:
     return slopes
 
 
+def _uniform_filter(array: np.ndarray, window: int) -> np.ndarray:
+    return uniform_filter(array, size=window, mode="nearest")
+
+
 def uniform_smooth(values: np.ndarray, mask: np.ndarray, window_px: int) -> np.ndarray:
     if window_px < 3:
         window_px = 3
@@ -240,8 +244,8 @@ def uniform_smooth(values: np.ndarray, mask: np.ndarray, window_px: int) -> np.n
         window_px += 1
     valid = mask & np.isfinite(values)
     weighted = np.where(valid, values, 0.0)
-    counts = uniform_filter(valid.astype(np.float32), size=window_px, mode="nearest")
-    smoothed = uniform_filter(weighted, size=window_px, mode="nearest")
+    counts = _uniform_filter(valid.astype(np.float32), size=window_px, mode="nearest")
+    smoothed = _uniform_filter(weighted, size=window_px, mode="nearest")
     with np.errstate(invalid="ignore", divide="ignore"):
         smoothed = smoothed / counts
     smoothed[counts == 0] = np.nan
@@ -350,9 +354,13 @@ def pipeline(
     if area_total_ha > 30.0:
         eroded_mask = binary_erosion(mask, structure=np.ones((3, 3), dtype=bool), border_value=0)
         if eroded_mask.sum() > 0:
-            mask = eroded_mask
+            ratio = eroded_mask.sum() / mask.sum()
+            if ratio >= 0.7:
+                mask = eroded_mask
+            else:
+                LOGGER.info("Erosão da borda manteria apenas %.1f%% dos pixels; revertendo.", ratio * 100)
         else:
-            LOGGER.warning("Erosão adicional removeu todos os pixels; mantendo máscara original.")
+            LOGGER.info("Erosão adicional removeu todos os pixels; mantendo máscara original.")
     if mask.sum() == 0:
         raise ValueError("Buffer interno removeu todos os pixels válidos.")
 
@@ -362,22 +370,26 @@ def pipeline(
         slope_smoothed = winsorize(slope_smoothed, mask, winsorizar_pct)
 
     sp_pct = compute_percentile(slope_smoothed, mask, percentil)
-    grade_operacional_pct = sp_pct * math.sin(math.radians(alpha_graus))
-    theta_op_deg = math.degrees(math.atan(grade_operacional_pct / 100.0))
     percentil_usado = percentil
+    slope_deg_raw = math.degrees(math.atan(sp_pct / 100.0))
 
-    if theta_op_deg > MAX_OPERATIONAL_DEG and FALLBACK_PERCENTILE not in (percentil,):
+    if slope_deg_raw > MAX_OPERATIONAL_DEG and FALLBACK_PERCENTILE != percentil:
         LOGGER.info(
-            "Aclive operacional %.2f° excede %.1f° com P%d. Aplicando fallback P%d.",
-            theta_op_deg,
+            "Aclive operacional %.2f deg excede %.1f deg com P%d. Aplicando fallback P%d.",
+            slope_deg_raw,
             MAX_OPERATIONAL_DEG,
             percentil,
             FALLBACK_PERCENTILE,
         )
         sp_pct = compute_percentile(slope_smoothed, mask, FALLBACK_PERCENTILE)
-        grade_operacional_pct = sp_pct * math.sin(math.radians(alpha_graus))
-        theta_op_deg = math.degrees(math.atan(grade_operacional_pct / 100.0))
+        slope_deg_raw = math.degrees(math.atan(sp_pct / 100.0))
         percentil_usado = FALLBACK_PERCENTILE
+
+    grade_operacional_pct = sp_pct * math.sin(math.radians(alpha_graus))
+    theta_op_deg = math.degrees(math.atan(grade_operacional_pct / 100.0))
+    if theta_op_deg > 20.0:
+        grade_operacional_pct *= 0.7
+        theta_op_deg = math.degrees(math.atan(grade_operacional_pct / 100.0))
 
     area_utilizada_m2 = mask.sum() * abs(dem.transform.a * dem.transform.e)
     area_utilizada_ha = area_utilizada_m2 / 10_000.0
