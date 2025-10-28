@@ -329,12 +329,22 @@ def _scale_latlon_to_canvas(
     if not points:
         return []
     lon_min, lon_max, lat_min, lat_max = bounds
-    span_lon = max(lon_max - lon_min, 1e-6)
-    span_lat = max(lat_max - lat_min, 1e-6)
+    span_lon = max(lon_max - lon_min, 1e-9)
+
+    def _lat_to_web_mercator(lat_deg: float) -> float:
+        clamped = max(min(lat_deg, 89.9), -89.9)
+        rad = math.radians(clamped)
+        return math.log(math.tan(rad / 2.0 + math.pi / 4.0))
+
+    y_min = _lat_to_web_mercator(lat_min)
+    y_max = _lat_to_web_mercator(lat_max)
+    span_y = max(y_max - y_min, 1e-9)
+
     coords: list[float] = []
     for lon, lat, _ in points:
         cx = (lon - lon_min) / span_lon * width
-        cy = height - ((lat - lat_min) / span_lat * height)
+        merc = _lat_to_web_mercator(lat)
+        cy = height - ((merc - y_min) / span_y * height)
         coords.extend((cx, cy))
     return coords
 
