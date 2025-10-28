@@ -13,6 +13,19 @@ class Solo(Enum):
     ARGILOSO = "ARGILOSO"
 
 
+class Tracao(Enum):
+    QUATRO_X_DOIS = "4X2"
+    QUATRO_X_DOIS_TDA = "4X2_TDA"
+    QUATRO_X_QUATRO = "4X4"
+    ESTEIRA = "ESTEIRA"
+
+
+class Superficie(Enum):
+    FIRME = "FIRME"
+    MEDIA = "MEDIA"
+    SOLTA = "SOLTA"
+
+
 class Sulcador(Enum):
     DISCOS = "DISCOS"   # equivalente a "Discos Duplos"
     FACAO = "FACAO"
@@ -29,6 +42,8 @@ class Inputs:
     - Preparo do solo           (planilha: C6)   -> Preparo
     - Tipo de solo              (planilha: C7)   -> Solo
     - Aclive (%)                (planilha: C8)   -> aclive_percent
+    - Tipo de tra��ǜo           (planilha: C9)   -> tracao
+    - Superf��cie de rolamento  (planilha: C9)   -> superficie
     - Sulcador                  (planilha: C10)  -> Sulcador
     - Número de linhas          (planilha: C11)  -> linhas
     - CV do trator disponível   (planilha: C12)  -> cv_trator_disponivel
@@ -36,6 +51,8 @@ class Inputs:
     """
     preparo: Preparo
     solo: Solo
+    tracao: Tracao
+    superficie: Superficie
     aclive_percent: float
     sulcador: Sulcador
     linhas: int
@@ -53,6 +70,8 @@ class Results:
     peso_trator_t: float          # Peso estimado do trator (t)
     acrescimo_aclive_N: float     # Acréscimo de força por aclive (N)
     cv_trator_disponivel: float   # Echo da entrada (cv)
+    eficiencia_tracao: float      # Fator aplicado conforme tracao/superficie
+    cv_tracionavel: float         # CV efetivamente disponivel para tracao
     atende: bool                  # Se o trator disponível atende ao requerido
 
 
@@ -73,6 +92,28 @@ FORCA_SULCADOR_N_POR_LINHA: Dict[Sulcador, int] = {
     Sulcador.FACAO: 3400,
 }
 
+EFICIENCIA_TRACAO: Dict[Tracao, Dict[Superficie, float]] = {
+    Tracao.QUATRO_X_DOIS: {
+        Superficie.FIRME: 0.60,
+        Superficie.MEDIA: 0.56,
+        Superficie.SOLTA: 0.46,
+    },
+    Tracao.QUATRO_X_DOIS_TDA: {
+        Superficie.FIRME: 0.64,
+        Superficie.MEDIA: 0.61,
+        Superficie.SOLTA: 0.54,
+    },
+    Tracao.QUATRO_X_QUATRO: {
+        Superficie.FIRME: 0.65,
+        Superficie.MEDIA: 0.62,
+        Superficie.SOLTA: 0.58,
+    },
+    Tracao.ESTEIRA: {
+        Superficie.FIRME: 0.68,
+        Superficie.MEDIA: 0.62,
+        Superficie.SOLTA: 0.58,
+    },
+}
 
 # =========================
 # Funções auxiliares (espelham fórmulas)
@@ -177,7 +218,9 @@ def calcular(inp: Inputs) -> Results:
     ft = calc_ft_N(inp.preparo, inp.linhas, inp.solo, inp.sulcador, acrescimo_N)
     kw = calc_kw(ft, inp.velocidade_kmh)
     cv_req = kw_to_cv(kw)
-    atende = inp.cv_trator_disponivel >= cv_req
+    eficiencia = EFICIENCIA_TRACAO[inp.tracao][inp.superficie]
+    cv_tracionavel = inp.cv_trator_disponivel * eficiencia
+    atende = cv_tracionavel >= cv_req
 
     return Results(
         ft_N=ft,
@@ -187,6 +230,8 @@ def calcular(inp: Inputs) -> Results:
         peso_trator_t=peso_trat_t,
         acrescimo_aclive_N=acrescimo_N,
         cv_trator_disponivel=inp.cv_trator_disponivel,
+        eficiencia_tracao=eficiencia,
+        cv_tracionavel=cv_tracionavel,
         atende=atende,
     )
 
@@ -234,6 +279,8 @@ if __name__ == "__main__":
     exemplo = Inputs(
         preparo=Preparo.PLANTIO_DIRETO,
         solo=Solo.ARGILOSO,
+        tracao=Tracao.QUATRO_X_DOIS_TDA,
+        superficie=Superficie.MEDIA,
         aclive_percent=12.0,
         sulcador=Sulcador.FACAO,
         linhas=7,
@@ -247,6 +294,8 @@ if __name__ == "__main__":
     print(f"cv requerido: {res.cv_requerido:,.2f}")
     print(f"Peso semeadora (t): {res.peso_semeadora_t:,.2f}")
     print(f"Peso trator (t): {res.peso_trator_t:,.2f}")
-    print(f"Acréscimo aclive (N): {res.acrescimo_aclive_N:,.2f}")
-    print(f"CV disponível: {res.cv_trator_disponivel:,.2f}")
+    print(f"Acrescimo aclive (N): {res.acrescimo_aclive_N:,.2f}")
+    print(f"CV disponivel: {res.cv_trator_disponivel:,.2f}")
+    print(f"Eficiencia de tracao: {res.eficiencia_tracao:.2f}")
+    print(f"CV util para tracao: {res.cv_tracionavel:,.2f}")
     print(f"Atende? {res.atende}")

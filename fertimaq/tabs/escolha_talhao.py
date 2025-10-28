@@ -45,10 +45,6 @@ class DemGrid:
     y_coords: np.ndarray
     step: float
 
-
-# --------------------------------------------------------------------------- #
-# KMZ / KML helpers                                                           #
-# --------------------------------------------------------------------------- #
 def _read_kml_from_kmz(path: Path) -> str:
     with zipfile.ZipFile(path) as kmz:
         kml_name = next((name for name in kmz.namelist() if name.lower().endswith(".kml")), None)
@@ -600,6 +596,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._canvas_bg_photo: ImageTk.PhotoImage | None = None
         self._status_var = ctk.StringVar(value="Nenhum talhao carregado.")
         self._file_var = ctk.StringVar(value="")
+        self._loading_message_var = ctk.StringVar(value="Processando talhao selecionado...")
 
         self._area_display_var = ctk.StringVar(value="Area (ha): --")
         self._slope_mean_display_var = ctk.StringVar(value="Aclive medio (P50 graus): --")
@@ -616,6 +613,9 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._manual_calc_button: ctk.CTkButton | None = None
         self._status_label: ctk.CTkLabel | None = None
         self._radio_buttons: dict[str, ctk.CTkRadioButton] = {}
+        self._loading_frame: ctk.CTkFrame | None = None
+        self._loading_bar: ctk.CTkProgressBar | None = None
+        self._loading_after_id: str | None = None
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -628,7 +628,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         mapa_card = create_card(scroll, row=0, column=0)
         mapa_card.grid_columnconfigure(0, weight=1)
-        mapa_card.grid_rowconfigure(5, weight=1)
+        mapa_card.grid_rowconfigure(6, weight=1)
 
         section_title(mapa_card, "Selecao do talhao (.kmz)")
 
@@ -661,8 +661,31 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text_color="#3d4e8a",
         ).grid(row=4, column=0, sticky="ew", padx=20, pady=(6, 12))
 
+        self._loading_frame = ctk.CTkFrame(mapa_card, fg_color="#2a3142", corner_radius=16)
+        self._loading_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 16))
+        self._loading_frame.grid_columnconfigure(0, weight=1)
+        self._loading_frame.grid_remove()
+
+        ctk.CTkLabel(
+            self._loading_frame,
+            textvariable=self._loading_message_var,
+            anchor="w",
+            text_color="#eef1fb",
+            font=ctk.CTkFont(weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", pady=(12, 6), padx=16)
+
+        self._loading_bar = ctk.CTkProgressBar(
+            self._loading_frame,
+            mode="indeterminate",
+            fg_color="#1f2330",
+            progress_color="#3d4e8a",
+            border_width=0,
+            corner_radius=10,
+        )
+        self._loading_bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+
         canvas_frame = ctk.CTkFrame(mapa_card, fg_color="#ffffff", corner_radius=18)
-        canvas_frame.grid(row=5, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        canvas_frame.grid(row=6, column=0, sticky="nsew", padx=20, pady=(0, 20))
         canvas_frame.grid_columnconfigure(0, weight=1)
         canvas_frame.grid_rowconfigure(0, weight=1)
         canvas_frame.configure(width=self._canvas_width, height=self._canvas_height)
@@ -958,6 +981,43 @@ class EscolhaTalhaoTab(FertiMaqTab):
         state = "normal" if mode == "manual" else "disabled"
         self._manual_calc_button.configure(state=state)
 
+    def _cancel_loading_callback(self) -> None:
+        if self._loading_after_id is not None:
+            try:
+                self.app.root.after_cancel(self._loading_after_id)
+            except Exception:
+                pass
+            self._loading_after_id = None
+
+    def _show_loading_indicator(self, message: str = "Processando talhao selecionado...") -> None:
+        if not self._loading_frame or not self._loading_bar:
+            return
+        self._cancel_loading_callback()
+        self._loading_message_var.set(message)
+        self._loading_frame.grid()
+        self._loading_bar.configure(mode="indeterminate")
+        self._loading_bar.set(0.0)
+        self._loading_bar.start()
+        self.app.root.update_idletasks()
+
+    def _finish_loading_indicator(self, message: str, *, success: bool) -> None:
+        if not self._loading_frame or not self._loading_bar:
+            return
+        self._loading_bar.stop()
+        self._loading_bar.configure(mode="determinate")
+        self._loading_bar.set(1.0 if success else 0.0)
+        self._loading_message_var.set(message)
+        self._cancel_loading_callback()
+        self._loading_after_id = self.app.root.after(800, self._hide_loading_indicator)
+
+    def _hide_loading_indicator(self) -> None:
+        self._loading_after_id = None
+        if not self._loading_frame or not self._loading_bar:
+            return
+        self._loading_frame.grid_remove()
+        self._loading_bar.configure(mode="indeterminate")
+        self._loading_bar.set(0.0)
+
     def _on_slopes_changed(self) -> None:
         self._update_slope_radios()
         self._refresh_info_labels()
@@ -981,6 +1041,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._load_kmz(Path(filename))
 
     def _load_kmz(self, path: Path) -> None:
+        self._show_loading_indicator("Processando talhao selecionado...")
         try:
             polygon, placemark_name = _load_polygon(path)
             projected, projection = _project_points(polygon)
@@ -1029,8 +1090,10 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
             self._update_slope_radios()
             self._refresh_manual_button_state()
+            self._finish_loading_indicator("Talhao carregado com sucesso!", success=True)
 
         except Exception as exc:
+            self._finish_loading_indicator("Falha ao carregar talhao.", success=False)
             self._projected_polygon = []
             self._original_polygon = []
             self._projection_params = None

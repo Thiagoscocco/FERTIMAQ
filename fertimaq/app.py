@@ -25,7 +25,7 @@ from ferticalc_ui_blueprint import (
     footer_label,
     init_theme,
 )
-from logica_calc import Inputs, Preparo, Results, Solo, Sulcador, calcular
+from logica_calc import Inputs, Preparo, Results, Solo, Sulcador, Superficie, Tracao, calcular
 
 if __package__ in {None, ""}:
     from fertimaq.tabs import FertiMaqTab, tab_registry  # type: ignore
@@ -57,6 +57,17 @@ class FertiMaqApp:
             "Medio": Solo.MEDIO,
             "Argiloso": Solo.ARGILOSO,
         }
+        self.tracao_options: Mapping[str, Tracao] = {
+            "4 x 2": Tracao.QUATRO_X_DOIS,
+            "4 x 2 TDA": Tracao.QUATRO_X_DOIS_TDA,
+            "4 x 4": Tracao.QUATRO_X_QUATRO,
+            "Esteira": Tracao.ESTEIRA,
+        }
+        self.superficie_options: Mapping[str, Superficie] = {
+            "Firme": Superficie.FIRME,
+            "Media": Superficie.MEDIA,
+            "Solta": Superficie.SOLTA,
+        }
         self.sulcador_options: Mapping[str, Sulcador] = {
             "Discos Duplos": Sulcador.DISCOS,
             "Facao": Sulcador.FACAO,
@@ -65,6 +76,8 @@ class FertiMaqApp:
         self.input_vars: Dict[str, ctk.StringVar] = {
             "preparo": ctk.StringVar(value="Plantio Direto"),
             "solo": ctk.StringVar(value="Medio"),
+            "tracao": ctk.StringVar(value="4 x 2"),
+            "superficie": ctk.StringVar(value="Media"),
             "sulcador": ctk.StringVar(value="Facao"),
             "linhas": ctk.StringVar(value="7"),
             "aclive_percent": ctk.StringVar(value="12.0"),
@@ -243,6 +256,8 @@ class FertiMaqApp:
     def _collect_inputs(self) -> Inputs:
         preparo = self._map_choice(self.input_vars["preparo"].get(), self.preparo_options, "preparo do solo")
         solo = self._map_choice(self.input_vars["solo"].get(), self.solo_options, "solo")
+        tracao = self._map_choice(self.input_vars["tracao"].get(), self.tracao_options, "tracao do trator")
+        superficie = self._map_choice(self.input_vars["superficie"].get(), self.superficie_options, "superficie do solo")
         sulcador = self._map_choice(self.input_vars["sulcador"].get(), self.sulcador_options, "sulcador")
 
         linhas = self._parse_int(self.input_vars["linhas"].get(), "numero de linhas")
@@ -253,6 +268,8 @@ class FertiMaqApp:
         return Inputs(
             preparo=preparo,
             solo=solo,
+            tracao=tracao,
+            superficie=superficie,
             aclive_percent=aclive,
             sulcador=sulcador,
             linhas=linhas,

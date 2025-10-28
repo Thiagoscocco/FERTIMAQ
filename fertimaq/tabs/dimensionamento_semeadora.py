@@ -23,12 +23,14 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         # Conjunto vars
         self._linhas_var = ctk.StringVar(value="7")
         self._sulcador_var = ctk.StringVar(value="Discos Duplos")
+        self._tracao_var = ctk.StringVar(value="4 x 2")
         self._cv_trator_var = ctk.StringVar(value="80.0")
         self._velocidade_var = ctk.StringVar(value="5.6")
 
         # Area vars
         self._preparo_var = ctk.StringVar(value="Plantio Direto")
         self._solo_var = ctk.StringVar(value="Medio")
+        self._superficie_var = ctk.StringVar(value="Media")
         self._aclive_display_var = ctk.StringVar(value="Aclive selecionado: --")
 
         # Result vars
@@ -38,9 +40,14 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._peso_conjunto_var = ctk.StringVar(value="--")
         self._cv_com_aclive_var = ctk.StringVar(value="--")
         self._cv_plano_var = ctk.StringVar(value="--")
+        self._cv_disponivel_var = ctk.StringVar(value="--")
+        self._cv_util_var = ctk.StringVar(value="--")
+        self._eficiencia_tracao_var = ctk.StringVar(value="--")
         self._status_label_ref: ctk.CTkLabel | None = None
         self._limite_aclive_var = ctk.StringVar(value="")
         self._sulcador_highlight_var = ctk.StringVar(value="")
+        self._section_states: dict[str, bool] = {}
+        self._collapsible_sections: dict[str, dict[str, object]] = {}
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -94,12 +101,22 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             row=2, column=1, sticky="ew", padx=(12, 0), pady=6
         )
 
+        # Tracao
+        ctk.CTkLabel(conjunto_body, text="Tipo de tracao do trator", anchor="w").grid(row=3, column=0, sticky="w", pady=6)
+        self._tracao_menu = ctk.CTkOptionMenu(
+            conjunto_body,
+            values=list(self.app.tracao_options.keys()),
+            variable=self._tracao_var,
+            anchor="w",
+        )
+        self._tracao_menu.grid(row=3, column=1, sticky="ew", padx=(12, 0), pady=6)
+
         # Velocidade
         ctk.CTkLabel(conjunto_body, text="Velocidade desejada (km/h)", anchor="w").grid(
-            row=3, column=0, sticky="w", pady=6
+            row=4, column=0, sticky="w", pady=6
         )
         ctk.CTkEntry(conjunto_body, textvariable=self._velocidade_var, width=140).grid(
-            row=3, column=1, sticky="ew", padx=(12, 0), pady=6
+            row=4, column=1, sticky="ew", padx=(12, 0), pady=6
         )
 
         primary_button(
@@ -142,13 +159,22 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         )
         self._solo_menu.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=6)
 
+        ctk.CTkLabel(area_body, text="Superficie do solo", anchor="w").grid(row=2, column=0, sticky="w", pady=6)
+        self._superficie_menu = ctk.CTkOptionMenu(
+            area_body,
+            values=list(self.app.superficie_options.keys()),
+            variable=self._superficie_var,
+            anchor="w",
+        )
+        self._superficie_menu.grid(row=2, column=1, sticky="ew", padx=(12, 0), pady=6)
+
         ctk.CTkLabel(
             area_body,
             textvariable=self._aclive_display_var,
             anchor="w",
             text_color="#eef1fb",
             font=ctk.CTkFont(weight="bold"),
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(16, 0))
 
         # Results + recommendations row
         bottom_row = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -175,15 +201,22 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._status_label_ref.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 16))
         self._status_var_color("#666666")
 
-        results_frame = ctk.CTkFrame(resultado_card, fg_color="transparent")
-        results_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))
-        results_frame.grid_columnconfigure(1, weight=1)
+        current_row = 2
+        self._pesos_content, current_row = self._create_collapsible_section(
+            resultado_card, row=current_row, title="Pesos", key="pesos"
+        )
+        self._add_result_row(self._pesos_content, 0, "Peso da semeadora (t)", self._peso_semeadora_var)
+        self._add_result_row(self._pesos_content, 1, "Peso do trator (t)", self._peso_trator_var)
+        self._add_result_row(self._pesos_content, 2, "Peso do conjunto (t)", self._peso_conjunto_var)
 
-        self._add_result_row(results_frame, 0, "Peso da semeadora (t)", self._peso_semeadora_var)
-        self._add_result_row(results_frame, 1, "Peso do trator (t)", self._peso_trator_var)
-        self._add_result_row(results_frame, 2, "Peso do conjunto (t)", self._peso_conjunto_var)
-        self._add_result_row(results_frame, 3, "CV necessario (com aclive)", self._cv_com_aclive_var)
-        self._add_result_row(results_frame, 4, "CV necessario (terreno plano)", self._cv_plano_var)
+        self._cv_content, current_row = self._create_collapsible_section(
+            resultado_card, row=current_row, title="CV", key="cvs"
+        )
+        self._add_result_row(self._cv_content, 0, "CV disponivel informado", self._cv_disponivel_var)
+        self._add_result_row(self._cv_content, 1, "CV necessario (com aclive)", self._cv_com_aclive_var)
+        self._add_result_row(self._cv_content, 2, "CV necessario (terreno plano)", self._cv_plano_var)
+        self._add_result_row(self._cv_content, 3, "Eficiencia de tracao (%)", self._eficiencia_tracao_var)
+        self._add_result_row(self._cv_content, 4, "CV util (com eficiencia)", self._cv_util_var)
 
         recomendacao_card = create_card(
             bottom_row,
@@ -238,6 +271,62 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             row=row, column=1, sticky="ew", pady=4
         )
 
+    def _create_collapsible_section(
+        self, parent: ctk.CTkFrame, *, row: int, title: str, key: str
+    ) -> tuple[ctk.CTkFrame, int]:
+        header_frame = ctk.CTkFrame(parent, fg_color="#2a3142", corner_radius=12)
+        header_frame.grid(row=row, column=0, sticky="ew", padx=20, pady=(0, 6))
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.configure(cursor="hand2")
+        label_var = ctk.StringVar(value=self._format_section_label(title, expanded=False))
+        header_label = ctk.CTkLabel(
+            header_frame,
+            textvariable=label_var,
+            anchor="w",
+            text_color="#eef1fb",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        header_label.grid(row=0, column=0, sticky="ew", padx=12, pady=8)
+        header_label.configure(cursor="hand2")
+        header_frame.bind("<Button-1>", lambda _event, k=key: self._toggle_section(k))
+        header_label.bind("<Button-1>", lambda _event, k=key: self._toggle_section(k))
+
+        content_frame = ctk.CTkFrame(parent, fg_color="#1f2330", corner_radius=12)
+        content_frame.grid(row=row + 1, column=0, sticky="ew", padx=20, pady=(0, 12))
+        content_frame.grid_columnconfigure(0, weight=1)
+        content_frame.grid_columnconfigure(1, weight=1)
+
+        self._collapsible_sections[key] = {
+            "frame": content_frame,
+            "label_var": label_var,
+            "title": title,
+        }
+        self._set_section_state(key, expanded=False)
+
+        return content_frame, row + 2
+
+    def _format_section_label(self, title: str, *, expanded: bool) -> str:
+        arrow = "▴" if expanded else "▾"
+        return f"{title} {arrow}"
+
+    def _set_section_state(self, key: str, *, expanded: bool) -> None:
+        self._section_states[key] = expanded
+        section = self._collapsible_sections.get(key)
+        if not section:
+            return
+        frame = section["frame"]
+        label_var: ctk.StringVar = section["label_var"]  # type: ignore[assignment]
+        title = section["title"]
+        if expanded:
+            frame.grid()
+        else:
+            frame.grid_remove()
+        label_var.set(self._format_section_label(str(title), expanded=expanded))
+
+    def _toggle_section(self, key: str) -> None:
+        current = self._section_states.get(key, False)
+        self._set_section_state(key, expanded=not current)
+
     def _refresh_aclive_label(self) -> None:
         text = self.app.field_vars["slope_selected_deg"].get()
         if text:
@@ -259,9 +348,11 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         try:
             preparo = self.app.preparo_options[self._preparo_var.get()]
             solo = self.app.solo_options[self._solo_var.get()]
+            tracao = self.app.tracao_options[self._tracao_var.get()]
+            superficie = self.app.superficie_options[self._superficie_var.get()]
             sulcador = self.app.sulcador_options[self._sulcador_var.get()]
         except KeyError:
-            self._status_var.set("Selecione preparo, solo e sulcador validos.")
+            self._status_var.set("Selecione preparo, solo, superficie, tracao e sulcador validos.")
             self._status_var_callback(error=True)
             return
 
@@ -272,6 +363,8 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         base_inputs = Inputs(
             preparo=preparo,
             solo=solo,
+            tracao=tracao,
+            superficie=superficie,
             aclive_percent=aclive_percent,
             sulcador=sulcador,
             linhas=linhas,
@@ -305,11 +398,15 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._peso_conjunto_var.set(f"{peso_conjunto:,.2f}".replace(",", "."))
         self._cv_com_aclive_var.set(f"{resultado.cv_requerido:,.2f}".replace(",", "."))
         self._cv_plano_var.set(f"{plano.cv_requerido:,.2f}".replace(",", "."))
+        self._cv_disponivel_var.set(f"{resultado.cv_trator_disponivel:,.2f}".replace(",", "."))
+        self._cv_util_var.set(f"{resultado.cv_tracionavel:,.2f}".replace(",", "."))
+        eficiencia_pct = resultado.eficiencia_tracao * 100.0
+        self._eficiencia_tracao_var.set(f"{eficiencia_pct:.0f}%".replace(",", "."))
 
         recomendacao, limite_info = self._gerar_recomendacao(
             resultado,
             plano,
-            cv_disponivel,
+            resultado.cv_tracionavel,
             linhas,
             velocidade,
             aclive_percent,
@@ -321,17 +418,19 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self,
         resultado: "Results",
         plano: "Results",
-        cv_disponivel: float,
+        cv_tracionavel: float,
         linhas: int,
         velocidade_kmh: float,
         aclive_percent: float,
     ) -> tuple[str, str]:
-        deficit = resultado.cv_requerido - cv_disponivel
+        deficit = resultado.cv_requerido - cv_tracionavel
         if deficit <= 0:
-            return "O conjunto consegue atender a velocidade necessaria para a operacao.", ""
+            return ("O conjunto consegue atender a velocidade necessaria para a operacao.", "")
 
         if deficit > 25:
-            limite_msg = self._slope_limite_mensagem(plano.cv_requerido, resultado.cv_requerido, cv_disponivel, aclive_percent)
+            limite_msg = self._slope_limite_mensagem(
+                plano.cv_requerido, resultado.cv_requerido, cv_tracionavel, aclive_percent
+            )
             return (
                 "O trator atual nao atende. Considere reduzir o numero de linhas da semeadora "
                 "ou utilizar um trator mais potente.",
@@ -340,9 +439,11 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
 
         # deficit <= 25: sugerir reduzir velocidade.
         # cv requerido proporcional a velocidade (kW cresce proporcionalmente). Ajuste multiplicativo:
-        velocidade_sugerida = max(1.0, velocidade_kmh * (cv_disponivel / resultado.cv_requerido))
+        velocidade_sugerida = max(1.0, velocidade_kmh * (cv_tracionavel / resultado.cv_requerido))
         velocidade_sugerida = round(velocidade_sugerida, 2)
-        limite_msg = self._slope_limite_mensagem(plano.cv_requerido, resultado.cv_requerido, cv_disponivel, aclive_percent)
+        limite_msg = self._slope_limite_mensagem(
+            plano.cv_requerido, resultado.cv_requerido, cv_tracionavel, aclive_percent
+        )
         return (
             "O trator atende se a velocidade for reduzida. "
             f"Sugestao: operar a aproximadamente {velocidade_sugerida} km/h.",
@@ -353,11 +454,11 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self,
         cv_plano: float,
         cv_total: float,
-        cv_disponivel: float,
+        cv_tracionavel: float,
         aclive_percent: float,
     ) -> str:
         extra_atual = max(cv_total - cv_plano, 0.0)
-        extra_disponivel = max(cv_disponivel - cv_plano, 0.0)
+        extra_disponivel = max(cv_tracionavel - cv_plano, 0.0)
         if extra_atual <= 1e-6 or extra_disponivel <= 0.0 or aclive_percent <= 0.0:
             return ""
 
