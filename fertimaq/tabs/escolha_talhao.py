@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, Iterable, Sequence
 import xml.etree.ElementTree as ET
 
+from io import BytesIO
+
 import numpy as np
 import tkinter as tk
 import urllib.error
@@ -19,6 +21,7 @@ import urllib.request
 import customtkinter as ctk
 from tkinter import filedialog
 from scipy.ndimage import binary_erosion, uniform_filter
+from PIL import Image, ImageTk
 
 from ferticalc_ui_blueprint import create_card, primary_button, section_title
 
@@ -288,6 +291,110 @@ def _collect_dem_grid(
 # --------------------------------------------------------------------------- #
 # Slope calculations                                                          #
 # --------------------------------------------------------------------------- #
+
+def _scale_projected_to_canvas(
+    points: Sequence[tuple[float, float]],
+    width: int,
+    height: int,
+    padding: int = 18,
+) -> list[float]:
+    if not points:
+        return []
+    xs = [px for px, _ in points]
+    ys = [py for _, py in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    span_x = max(max_x - min_x, 1.0)
+    span_y = max(max_y - min_y, 1.0)
+
+    scale = min((width - 2 * padding) / span_x, (height - 2 * padding) / span_y)
+    scale = max(scale, 0.0001)
+
+    draw_w = span_x * scale
+    draw_h = span_y * scale
+    offset_x = (width - draw_w) / 2.0
+    offset_y = (height - draw_h) / 2.0
+
+    coords: list[float] = []
+    for x, y in points:
+        cx = offset_x + (x - min_x) * scale
+        cy = height - (offset_y + (y - min_y) * scale)
+        coords.extend((cx, cy))
+    return coords
+
+
+def _scale_latlon_to_canvas(
+    points: Sequence[tuple[float, float, float]],
+    bounds: tuple[float, float, float, float],
+    width: int,
+    height: int,
+) -> list[float]:
+    if not points:
+        return []
+    lon_min, lon_max, lat_min, lat_max = bounds
+    span_lon = max(lon_max - lon_min, 1e-6)
+    span_lat = max(lat_max - lat_min, 1e-6)
+    coords: list[float] = []
+    for lon, lat, _ in points:
+        cx = (lon - lon_min) / span_lon * width
+        cy = height - ((lat - lat_min) / span_lat * height)
+        coords.extend((cx, cy))
+    return coords
+
+
+def _download_satellite_snapshot(
+    points: Sequence[tuple[float, float, float]],
+    canvas_width: int,
+    canvas_height: int,
+) -> tuple[ImageTk.PhotoImage | None, tuple[float, float, float, float] | None]:
+    if not points:
+        return None, None
+
+    lons = [lon for lon, _, _ in points]
+    lats = [lat for _, lat, _ in points]
+    lon_min, lon_max = min(lons), max(lons)
+    lat_min, lat_max = min(lats), max(lats)
+
+    lon_span = max(lon_max - lon_min, 0.0005)
+    lat_span = max(lat_max - lat_min, 0.0005)
+    margin = 0.25
+    lon_span *= 1.0 + margin
+    lat_span *= 1.0 + margin
+
+    lon_span = min(max(lon_span, 0.002), 10.0)
+    lat_span = min(max(lat_span, 0.002), 10.0)
+
+    center_lon = (lon_min + lon_max) / 2.0
+    center_lat = (lat_min + lat_max) / 2.0
+
+    url = (
+        "https://static-maps.yandex.ru/1.x/?"
+        f"l=sat&ll={center_lon:.6f},{center_lat:.6f}&spn={lon_span:.6f},{lat_span:.6f}&size=450,450"
+    )
+
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = response.read()
+    except Exception:
+        return None, None
+
+    try:
+        image = Image.open(BytesIO(data)).convert("RGB")
+    except Exception:
+        return None, None
+
+    resample = Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.BILINEAR
+    image = image.resize((canvas_width, canvas_height), resample)
+    photo = ImageTk.PhotoImage(image)
+
+    bounds = (
+        center_lon - lon_span / 2.0,
+        center_lon + lon_span / 2.0,
+        center_lat - lat_span / 2.0,
+        center_lat + lat_span / 2.0,
+    )
+    return photo, bounds
 def _compute_slope_percent(grid: DemGrid) -> np.ndarray:
     elev = grid.elevations
     mask = grid.mask
@@ -492,7 +599,10 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._canvas_height = 620
 
         self._projected_polygon: list[tuple[float, float]] = []
+        self._original_polygon: list[tuple[float, float, float]] = []
         self._projection_params: Dict[str, float] | None = None
+        self._map_bounds: tuple[float, float, float, float] | None = None
+        self._canvas_bg_photo: ImageTk.PhotoImage | None = None
         self._status_var = ctk.StringVar(value="Nenhum talhao carregado.")
         self._file_var = ctk.StringVar(value="")
 
@@ -669,7 +779,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         primary_button(
             manual_card,
-            text="Aplicar valores manuais",
+            text="CALCULAR",
             command=self._apply_manual_values,
             row=3,
         )
@@ -736,6 +846,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
         if not self._canvas:
             return
         self._canvas.delete("all")
+        if self._canvas_bg_photo:
+            self._canvas.create_image(0, 0, image=self._canvas_bg_photo, anchor="nw")
         if not self._projected_polygon:
             self._canvas.create_text(
                 self._canvas_width / 2,
@@ -746,7 +858,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             )
             return
 
-        coords = self._scale_to_canvas(self._projected_polygon, self._canvas_width, self._canvas_height)
+        coords = self._polygon_to_canvas()
         if not coords:
             return
 
@@ -756,43 +868,26 @@ class EscolhaTalhaoTab(FertiMaqTab):
             outline="#3450a1",
             width=2,
         )
-        if self._correction_active:
-            self._canvas.create_text(
-                self._canvas_width / 2,
-                self._canvas_height / 2,
-                text="Fator 0.7 aplicado",
-                fill="#d08a45",
-                font=("Calibri", 30, "bold"),
-                angle=22,
-                stipple="gray50",
+
+    def _polygon_to_canvas(self) -> list[float]:
+        if self._map_bounds and self._original_polygon:
+            return _scale_latlon_to_canvas(
+                self._original_polygon, self._map_bounds, self._canvas_width, self._canvas_height
             )
+        return _scale_projected_to_canvas(
+            self._projected_polygon,
+            self._canvas_width,
+            self._canvas_height,
+            padding=0,
+        )
 
-    @staticmethod
-    def _scale_to_canvas(
-        points: Sequence[tuple[float, float]],
-        width: int,
-        height: int,
-        padding: int = 18,
-    ) -> list[float]:
-        if not points:
-            return []
-        xs = [px for px, _ in points]
-        ys = [py for _, py in points]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-
-        span_x = max(max_x - min_x, 1.0)
-        span_y = max(max_y - min_y, 1.0)
-
-        scale = min((width - 2 * padding) / span_x, (height - 2 * padding) / span_y)
-        scale = max(scale, 0.0001)
-
-        coords: list[float] = []
-        for x, y in points:
-            cx = padding + (x - min_x) * scale
-            cy = height - (padding + (y - min_y) * scale)
-            coords.extend((cx, cy))
-        return coords
+    def _update_canvas_background(self, polygon: Sequence[tuple[float, float, float]]) -> None:
+        self._canvas_bg_photo = None
+        self._map_bounds = None
+        photo, bounds = _download_satellite_snapshot(polygon, self._canvas_width, self._canvas_height)
+        if photo and bounds:
+            self._canvas_bg_photo = photo
+            self._map_bounds = bounds
 
     # ------------------------------------------------------------------ #
     # State updates                                                      #
@@ -875,7 +970,9 @@ class EscolhaTalhaoTab(FertiMaqTab):
             slopes_available = max(mean_deg, severe_deg) > 0.05
 
             self._projected_polygon = projected
+            self._original_polygon = polygon
             self._projection_params = projection
+            self._update_canvas_background(polygon)
             self.app.field_vars["kmz_path"].set(path.name)
             self.app.set_field_area(area_ha, source="mapa")
             self.app.manual_area_var.set(f"{area_ha:.2f}")
@@ -899,8 +996,6 @@ class EscolhaTalhaoTab(FertiMaqTab):
                 status_msg = (
                     f"Talhao carregado. Medio (P50): {mean_deg:.2f} graus. Maximo (P95): {severe_deg:.2f} graus."
                 )
-                if correction_applied:
-                    status_msg += " Fator 0.7 aplicado aos valores acima de 20 graus."
                 self._status_var.set(status_msg)
             else:
                 self.app.field_vars["slope_mode"].set("manual")
@@ -914,9 +1009,12 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         except Exception as exc:
             self._projected_polygon = []
+            self._original_polygon = []
             self._projection_params = None
             self._slope_mean_deg = None
             self._correction_active = False
+            self._map_bounds = None
+            self._canvas_bg_photo = None
             self._render_canvas()
             self.app.field_vars["kmz_path"].set("")
             if self._status_label:
@@ -972,4 +1070,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
         if self._status_label:
             self._status_label.configure(text_color="#3d4e8a")
         self._status_var.set("Aclive atualizado para uso nas proximas abas.")
+        if mode != "manual":
+            selected_value = self.app.field_vars["slope_selected_deg"].get()
+            if selected_value:
+                self.app.manual_slope_deg_var.set(selected_value)
         self._refresh_info_labels()
