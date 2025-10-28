@@ -58,7 +58,7 @@ class FertiMaqApp:
             "Argiloso": Solo.ARGILOSO,
         }
         self.sulcador_options: Mapping[str, Sulcador] = {
-            "Discos/Botinha": Sulcador.DISCOS,
+            "Discos Duplos": Sulcador.DISCOS,
             "Facao": Sulcador.FACAO,
         }
 

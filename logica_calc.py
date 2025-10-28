@@ -14,7 +14,7 @@ class Solo(Enum):
 
 
 class Sulcador(Enum):
-    DISCOS = "DISCOS"   # equivalente a "Discos/Botinha"
+    DISCOS = "DISCOS"   # equivalente a "Discos Duplos"
     FACAO = "FACAO"
 
 
@@ -69,7 +69,7 @@ FATOR_SOLO: Dict[Solo, float] = {
 
 # PROCV(C10, H17:I18, 2, FALSO)
 FORCA_SULCADOR_N_POR_LINHA: Dict[Sulcador, int] = {
-    Sulcador.DISCOS: 1900,  # "Discos/Botinha"
+    Sulcador.DISCOS: 1900,  # "Discos Duplos"
     Sulcador.FACAO: 3400,
 }
 

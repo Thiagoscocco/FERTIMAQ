@@ -8,7 +8,7 @@ from dataclasses import replace
 import customtkinter as ctk
 
 from ferticalc_ui_blueprint import create_card, primary_button, section_title
-from logica_calc import Inputs, calcular
+from logica_calc import Inputs, Sulcador, calcular
 
 from .base import FertiMaqTab, tab_registry
 
@@ -22,7 +22,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         super().__init__(app)
         # Conjunto vars
         self._linhas_var = ctk.StringVar(value="7")
-        self._sulcador_var = ctk.StringVar(value="Discos/Botinha")
+        self._sulcador_var = ctk.StringVar(value="Discos Duplos")
         self._cv_trator_var = ctk.StringVar(value="80.0")
         self._velocidade_var = ctk.StringVar(value="5.6")
 
@@ -40,6 +40,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._cv_plano_var = ctk.StringVar(value="--")
         self._status_label_ref: ctk.CTkLabel | None = None
         self._limite_aclive_var = ctk.StringVar(value="")
+        self._sulcador_highlight_var = ctk.StringVar(value="")
 
     # ------------------------------------------------------------------ #
     # UI assembly
@@ -192,6 +193,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             padding={"padx": (10, 0), "pady": (0, 0)},
         )
         recomendacao_card.grid_columnconfigure(0, weight=1)
+        recomendacao_card.grid_rowconfigure(2, weight=1)
         section_title(recomendacao_card, "RECOMENDACOES")
 
         self._recomendacao_var = ctk.StringVar(value="Calcule o dimensionamento para receber recomendacoes.")
@@ -210,7 +212,17 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             wraplength=320,
             justify="left",
             text_color="#e0c060",
-        ).grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 16))
+        ).grid(row=3, column=0, sticky="ew", padx=20, pady=(4, 10))
+
+        ctk.CTkLabel(
+            recomendacao_card,
+            textvariable=self._sulcador_highlight_var,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+            text_color="#f0a935",
+            font=ctk.CTkFont(weight="bold"),
+        ).grid(row=4, column=0, sticky="sew", padx=20, pady=(0, 16))
 
         # React to slope changes
         self.app.field_vars["slope_selected_deg"].trace_add("write", lambda *_: self._refresh_aclive_label())
@@ -234,6 +246,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             self._aclive_display_var.set("Aclive selecionado: --")
 
     def _executar_calculo(self) -> None:
+        self._sulcador_highlight_var.set("")
         try:
             linhas = int(self._linhas_var.get())
             cv_disponivel = float(self._cv_trator_var.get().replace(",", "."))
@@ -277,6 +290,14 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
 
         self._status_var.set("Dimensionamento calculado com sucesso.")
         self._status_var_callback(error=False)
+        if sulcador is Sulcador.DISCOS:
+            self._sulcador_highlight_var.set(
+                "Discos duplos selecionados:\nMilho: 6,5 km/h | Outras culturas: ate 7,5 km/h."
+            )
+        else:
+            self._sulcador_highlight_var.set(
+                "Facao selecionado:\nMilho: 5,5 km/h | Outras culturas: ate 6 km/h."
+            )
 
         peso_conjunto = resultado.peso_semeadora_t + resultado.peso_trator_t
         self._peso_semeadora_var.set(f"{resultado.peso_semeadora_t:,.2f}".replace(",", "."))
