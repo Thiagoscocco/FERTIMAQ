@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Dict, Iterable, Sequence
 import xml.etree.ElementTree as ET
 
-from io import BytesIO
-
 import numpy as np
 import tkinter as tk
 import urllib.error
@@ -21,6 +19,8 @@ import urllib.request
 import customtkinter as ctk
 from tkinter import filedialog
 from scipy.ndimage import binary_erosion, uniform_filter
+from PIL import Image, ImageTk
+from io import BytesIO
 from PIL import Image, ImageTk
 
 from ferticalc_ui_blueprint import create_card, primary_button, section_title
@@ -356,45 +356,40 @@ def _download_satellite_snapshot(
     lon_min, lon_max = min(lons), max(lons)
     lat_min, lat_max = min(lats), max(lats)
 
+
     lon_span = max(lon_max - lon_min, 0.0005)
     lat_span = max(lat_max - lat_min, 0.0005)
-    margin = 0.25
-    lon_span *= 1.0 + margin
-    lat_span *= 1.0 + margin
-
-    lon_span = min(max(lon_span, 0.002), 10.0)
-    lat_span = min(max(lat_span, 0.002), 10.0)
+    base_span = max(lon_span, lat_span)
 
     center_lon = (lon_min + lon_max) / 2.0
     center_lat = (lat_min + lat_max) / 2.0
 
-    url = (
-        "https://static-maps.yandex.ru/1.x/?"
-        f"l=sat&ll={center_lon:.6f},{center_lat:.6f}&spn={lon_span:.6f},{lat_span:.6f}&size=450,450"
-    )
+    for margin in (0.7, 0.55, 0.4):
+        span = max(base_span * (1.0 + margin), 0.002)
+        span = min(span, 10.0)
+        for size in (650, 600, 550, 500, 450):
+            url = (
+                "https://static-maps.yandex.ru/1.x/?"
+                f"l=sat&ll={center_lon:.6f},{center_lat:.6f}&spn={span:.6f},{span:.6f}&size={size},{size}"
+            )
+            try:
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    data = response.read()
+                image = Image.open(BytesIO(data)).convert("RGB")
+            except Exception:
+                continue
+            resample = Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.BILINEAR
+            image = image.resize((canvas_width, canvas_height), resample)
+            photo = ImageTk.PhotoImage(image)
+            bounds = (
+                center_lon - span / 2.0,
+                center_lon + span / 2.0,
+                center_lat - span / 2.0,
+                center_lat + span / 2.0,
+            )
+            return photo, bounds
 
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = response.read()
-    except Exception:
-        return None, None
-
-    try:
-        image = Image.open(BytesIO(data)).convert("RGB")
-    except Exception:
-        return None, None
-
-    resample = Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.BILINEAR
-    image = image.resize((canvas_width, canvas_height), resample)
-    photo = ImageTk.PhotoImage(image)
-
-    bounds = (
-        center_lon - lon_span / 2.0,
-        center_lon + lon_span / 2.0,
-        center_lat - lat_span / 2.0,
-        center_lat + lat_span / 2.0,
-    )
-    return photo, bounds
+    return None, None
 def _compute_slope_percent(grid: DemGrid) -> np.ndarray:
     elev = grid.elevations
     mask = grid.mask
@@ -618,6 +613,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._last_slope_mode = "manual"
 
         self._canvas: tk.Canvas | None = None
+        self._manual_calc_button: ctk.CTkButton | None = None
         self._status_label: ctk.CTkLabel | None = None
         self._radio_buttons: dict[str, ctk.CTkRadioButton] = {}
 
@@ -632,6 +628,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
 
         mapa_card = create_card(scroll, row=0, column=0)
         mapa_card.grid_columnconfigure(0, weight=1)
+        mapa_card.grid_rowconfigure(5, weight=1)
 
         section_title(mapa_card, "Selecao do talhao (.kmz)")
 
@@ -665,7 +662,11 @@ class EscolhaTalhaoTab(FertiMaqTab):
         ).grid(row=4, column=0, sticky="ew", padx=20, pady=(6, 12))
 
         canvas_frame = ctk.CTkFrame(mapa_card, fg_color="#ffffff", corner_radius=18)
-        canvas_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 20))
+        canvas_frame.grid(row=5, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        canvas_frame.grid_columnconfigure(0, weight=1)
+        canvas_frame.grid_rowconfigure(0, weight=1)
+        canvas_frame.configure(width=self._canvas_width, height=self._canvas_height)
+        canvas_frame.grid_propagate(False)
 
         self._canvas = tk.Canvas(
             canvas_frame,
@@ -674,7 +675,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             background="#ffffff",
             highlightthickness=0,
         )
-        self._canvas.grid(row=0, column=0, padx=18, pady=18)
+        self._canvas.grid(row=0, column=0, sticky="nsew")
 
         cards_row = ctk.CTkFrame(scroll, fg_color="transparent")
         cards_row.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -777,12 +778,16 @@ class EscolhaTalhaoTab(FertiMaqTab):
             width=140,
         ).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=6)
 
-        primary_button(
+        self._manual_calc_button = ctk.CTkButton(
             manual_card,
             text="CALCULAR",
             command=self._apply_manual_values,
-            row=3,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#4CAF50",
+            hover_color="#388E3C",
+            text_color="#ffffff",
         )
+        self._manual_calc_button.grid(row=3, column=0, sticky="ew", padx=20, pady=(10, 18))
 
         ctk.CTkLabel(
             manual_card,
@@ -884,7 +889,14 @@ class EscolhaTalhaoTab(FertiMaqTab):
     def _update_canvas_background(self, polygon: Sequence[tuple[float, float, float]]) -> None:
         self._canvas_bg_photo = None
         self._map_bounds = None
-        photo, bounds = _download_satellite_snapshot(polygon, self._canvas_width, self._canvas_height)
+        if self._canvas is not None:
+            self._canvas.update_idletasks()
+            width = max(int(self._canvas.winfo_width() or self._canvas_width), self._canvas_width)
+            height = max(int(self._canvas.winfo_height() or self._canvas_height), self._canvas_height)
+        else:
+            width = self._canvas_width
+            height = self._canvas_height
+        photo, bounds = _download_satellite_snapshot(polygon, width, height)
         if photo and bounds:
             self._canvas_bg_photo = photo
             self._map_bounds = bounds
@@ -976,6 +988,8 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self.app.field_vars["kmz_path"].set(path.name)
             self.app.set_field_area(area_ha, source="mapa")
             self.app.manual_area_var.set(f"{area_ha:.2f}")
+            if self._manual_calc_button is not None:
+                self._manual_calc_button.configure(state="disabled")
             if slopes_available:
                 self._slope_mean_deg = mean_deg
                 self._correction_active = correction_applied
@@ -1023,12 +1037,20 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self._file_var.set("")
             self.app.clear_map_slopes()
             self.app.clear_manual_slope()
+            if self._manual_calc_button is not None:
+                self._manual_calc_button.configure(state="normal")
             self._update_slope_radios()
             self._refresh_info_labels()
 
     def _apply_manual_values(self) -> None:
         area_text = (self.app.manual_area_var.get() or "").strip().replace(",", ".")
         slope_text = (self.app.manual_slope_deg_var.get() or "").strip().replace(",", ".")
+
+        if self._projected_polygon:
+            if self._status_label:
+                self._status_label.configure(text_color="#b00020")
+            self._status_var.set("Para usar o modo manual, remova o talhao carregado.")
+            return
 
         try:
             if not area_text:
