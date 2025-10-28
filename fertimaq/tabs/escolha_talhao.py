@@ -455,7 +455,7 @@ def _compute_percentiles(
     grid: DemGrid,
     janela_m: float,
     winsorizar_pct: float,
-) -> tuple[dict[int, float], float]:
+) -> tuple[dict[int, float], float, float]:
     slopes_pct = _compute_slope_percent(grid)
     mask = grid.mask & np.isfinite(slopes_pct)
     if mask.sum() == 0:
@@ -470,6 +470,15 @@ def _compute_percentiles(
     if valid.size == 0:
         raise ValueError("Nenhum pixel valido apos suavizacao.")
 
+    hist_counts, bin_edges = np.histogram(valid, bins="auto")
+    if hist_counts.size == 0:
+        mode_pct = float(np.nanmean(valid))
+    else:
+        mode_idx = int(np.argmax(hist_counts))
+        if mode_idx >= len(bin_edges) - 1:
+            mode_idx = len(bin_edges) - 2
+        mode_pct = float((bin_edges[mode_idx] + bin_edges[mode_idx + 1]) / 2.0)
+
     percentiles = {
         50: float(np.nanmean(valid)),
         70: float(np.nanpercentile(valid, 70)),
@@ -478,7 +487,7 @@ def _compute_percentiles(
         90: float(np.nanpercentile(valid, 90)),
         95: float(np.nanpercentile(valid, 95)),
     }
-    return percentiles, float(grid.step)
+    return percentiles, float(grid.step), mode_pct
 
 
 def _pct_to_deg(slope_pct: float) -> float:
@@ -502,10 +511,10 @@ def _apply_correction_deg(angle_deg: float) -> tuple[float, bool]:
 def _slopes_from_edges(
     projected: Sequence[tuple[float, float]],
     original: Sequence[tuple[float, float, float]],
-) -> tuple[float, float, float, int, bool]:
+) -> tuple[float, float, float, float, int, bool]:
     n = min(len(projected), len(original))
     if n < 2:
-        return 0.0, 0.0, 0.0, DEFAULT_OPERATIONAL_PERCENTILE, False
+        return 0.0, 0.0, 0.0, 0.0, DEFAULT_OPERATIONAL_PERCENTILE, False
 
     weighted_sum = 0.0
     total_length = 0.0
@@ -535,17 +544,17 @@ def _slopes_from_edges(
     avg_deg, avg_corrected = _apply_correction_deg(avg_deg)
     max_deg, max_corrected = _apply_correction_deg(max_deg)
     correction_applied = avg_corrected or max_corrected
-    return avg_deg, max_deg, max_deg, DEFAULT_OPERATIONAL_PERCENTILE, correction_applied
+    return avg_deg, max_deg, max_deg, avg_deg, DEFAULT_OPERATIONAL_PERCENTILE, correction_applied
 
 
 def _slopes_from_polygon(
     projected: Sequence[tuple[float, float]],
     original: Sequence[tuple[float, float, float]],
     projection: Dict[str, float],
-) -> tuple[float, float, float, int, bool]:
+) -> tuple[float, float, float, float, int, bool]:
     grid = _collect_dem_grid(projected, projection)
     if grid:
-        percentiles, _ = _compute_percentiles(grid, janela_m=50.0, winsorizar_pct=0.0)
+        percentiles, _, mode_pct = _compute_percentiles(grid, janela_m=50.0, winsorizar_pct=0.0)
         mean_pct = percentiles[50]
         mean_pct, mean_corrected = _apply_correction_pct(mean_pct)
         mean_deg = _pct_to_deg(mean_pct)
@@ -571,7 +580,11 @@ def _slopes_from_polygon(
         severe_pct, severe_corrected = _apply_correction_pct(severe_pct)
         severe_deg = _pct_to_deg(severe_pct)
         correction_applied = correction_applied or severe_corrected
-        return mean_deg, operational_deg, severe_deg, operational_percentile, correction_applied
+
+        mode_pct, mode_corrected = _apply_correction_pct(mode_pct)
+        mode_deg = _pct_to_deg(mode_pct)
+        correction_applied = correction_applied or mode_corrected
+        return mean_deg, operational_deg, severe_deg, mode_deg, operational_percentile, correction_applied
 
     return _slopes_from_edges(projected, original)
 
@@ -601,10 +614,12 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._area_display_var = ctk.StringVar(value="Area (ha): --")
         self._slope_mean_display_var = ctk.StringVar(value="Aclive medio (P50 graus): --")
         self._slope_max_display_var = ctk.StringVar(value="Aclive maximo (P95 graus): --")
+        self._slope_mode_display_var = ctk.StringVar(value="Aclive mais frequente: --")
         self._slope_selected_display_var = ctk.StringVar(value="Aclive em uso (graus): --")
         self._correction_message_var = ctk.StringVar(value="")
 
         self._slope_mean_deg: float | None = None
+        self._slope_mode_deg: float | None = None
         self._correction_active = False
 
         self._last_slope_mode = "manual"
@@ -733,17 +748,23 @@ class EscolhaTalhaoTab(FertiMaqTab):
         ).grid(row=1, column=0, sticky="ew", pady=8)
         ctk.CTkLabel(
             summary_body,
-            textvariable=self._slope_max_display_var,
+            textvariable=self._slope_mode_display_var,
             anchor="w",
             text_color="#eef1fb",
         ).grid(row=2, column=0, sticky="ew", pady=8)
+        ctk.CTkLabel(
+            summary_body,
+            textvariable=self._slope_max_display_var,
+            anchor="w",
+            text_color="#eef1fb",
+        ).grid(row=3, column=0, sticky="ew", pady=8)
         ctk.CTkLabel(
             summary_body,
             textvariable=self._slope_selected_display_var,
             anchor="w",
             text_color="#d8def4",
             font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ).grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
         ctk.CTkLabel(
             summary_card,
@@ -844,6 +865,16 @@ class EscolhaTalhaoTab(FertiMaqTab):
         )
         self._radio_buttons["medio"].grid(row=0, column=1, padx=(0, 12), pady=4)
 
+        self._radio_buttons["frequente"] = ctk.CTkRadioButton(
+            radio_frame,
+            text="Frequente (modo)",
+            value="frequente",
+            variable=slope_mode_var,
+            text_color="#eef1fb",
+            command=lambda: self._on_slope_mode_change("frequente"),
+        )
+        self._radio_buttons["frequente"].grid(row=0, column=2, padx=(0, 12), pady=4)
+
         self._radio_buttons["maximo"] = ctk.CTkRadioButton(
             radio_frame,
             text="Maximo (P95)",
@@ -852,7 +883,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             text_color="#eef1fb",
             command=lambda: self._on_slope_mode_change("maximo"),
         )
-        self._radio_buttons["maximo"].grid(row=0, column=2, padx=(0, 12), pady=4)
+        self._radio_buttons["maximo"].grid(row=0, column=3, padx=(0, 12), pady=4)
 
         mapa_card.update_idletasks()
         manual_card.update_idletasks()
@@ -933,19 +964,25 @@ class EscolhaTalhaoTab(FertiMaqTab):
         area_text = self.app.field_vars["area_hectares"].get()
         mean_text_var = self.app.field_vars["slope_avg_deg"].get()
         max_text_var = self.app.field_vars["slope_max_deg"].get()
+        mode_text_var = self.app.field_vars["slope_mode_deg"].get()
         selected_text = self.app.field_vars["slope_selected_deg"].get()
         mode = self.app.field_vars["slope_mode"].get()
         mean_fallback = f"{self._slope_mean_deg:.2f}" if self._slope_mean_deg is not None else "--"
+        mode_fallback = f"{self._slope_mode_deg:.2f}" if self._slope_mode_deg is not None else "--"
 
         mean_text = mean_text_var or mean_fallback
         max_text = max_text_var or "--"
+        mode_text = mode_text_var or mode_fallback
 
         self._area_display_var.set(f"Area (ha): {area_text or '--'}")
         self._slope_mean_display_var.set(f"Aclive medio (P50 graus): {mean_text}")
+        self._slope_mode_display_var.set(f"Aclive mais frequente: {mode_text}")
         self._slope_max_display_var.set(f"Aclive maximo (P95 graus): {max_text}")
 
         if 'medio' in self._radio_buttons:
             self._radio_buttons['medio'].configure(text='Medio (P50)')
+        if 'frequente' in self._radio_buttons:
+            self._radio_buttons['frequente'].configure(text='Frequente (modo)')
         if 'maximo' in self._radio_buttons:
             self._radio_buttons['maximo'].configure(text='Maximo (P95)')
 
@@ -953,6 +990,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             mode_label = {
                 'manual': 'Manual',
                 'medio': 'Medio (P50)',
+                'frequente': 'Frequente (modo)',
                 'maximo': 'Maximo (P95)',
             }.get(mode, mode)
             self._slope_selected_display_var.set(f"Aclive em uso ({mode_label}): {selected_text} graus")
@@ -967,10 +1005,13 @@ class EscolhaTalhaoTab(FertiMaqTab):
         self._render_canvas()
 
     def _update_slope_radios(self) -> None:
-        has_map_slopes = bool(self.app.field_vars["slope_avg_deg"].get() or self.app.field_vars["slope_max_deg"].get())
-        state = "normal" if has_map_slopes else "disabled"
+        has_mean_max = bool(self.app.field_vars["slope_avg_deg"].get() or self.app.field_vars["slope_max_deg"].get())
+        state_mean = "normal" if has_mean_max else "disabled"
         for key in ("medio", "maximo"):
-            self._radio_buttons[key].configure(state=state)
+            self._radio_buttons[key].configure(state=state_mean)
+        has_mode_value = bool(self.app.field_vars["slope_mode_deg"].get())
+        if "frequente" in self._radio_buttons:
+            self._radio_buttons["frequente"].configure(state="normal" if has_mode_value else "disabled")
         self._radio_buttons["manual"].configure(state="normal")
         self._refresh_manual_button_state()
 
@@ -1047,7 +1088,7 @@ class EscolhaTalhaoTab(FertiMaqTab):
             projected, projection = _project_points(polygon)
             area_m2 = _polygon_area_m2(projected)
             area_ha = area_m2 / 10_000.0
-            mean_deg, _, severe_deg, _, correction_applied = _slopes_from_polygon(
+            mean_deg, _, severe_deg, mode_deg, _, correction_applied = _slopes_from_polygon(
                 projected, polygon, projection
             )
             slopes_available = max(mean_deg, severe_deg) > 0.05
@@ -1061,11 +1102,13 @@ class EscolhaTalhaoTab(FertiMaqTab):
             self.app.manual_area_var.set(f"{area_ha:.2f}")
             if slopes_available:
                 self._slope_mean_deg = mean_deg
+                self._slope_mode_deg = mode_deg
                 self._correction_active = correction_applied
-                self.app.set_map_slopes(mean_deg, severe_deg)
+                self.app.set_map_slopes(mean_deg, severe_deg, mode_deg=mode_deg)
                 self.app.preset_manual_slope(mean_deg)
             else:
                 self._slope_mean_deg = None
+                self._slope_mode_deg = None
                 self._correction_active = False
                 self.app.clear_map_slopes()
                 self.app.clear_manual_slope()

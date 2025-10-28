@@ -103,6 +103,7 @@ class FertiMaqApp:
             "area_source": ctk.StringVar(value="manual"),
             "slope_avg_deg": ctk.StringVar(value=""),
             "slope_max_deg": ctk.StringVar(value=""),
+            "slope_mode_deg": ctk.StringVar(value=""),
             "slope_selected_deg": ctk.StringVar(value=""),
             "slope_mode": ctk.StringVar(value="manual"),
         }
@@ -112,6 +113,7 @@ class FertiMaqApp:
         self._field_area_value: float | None = None
         self._field_slope_avg_deg: float | None = None
         self._field_slope_max_deg: float | None = None
+        self._field_slope_mode_deg: float | None = None
         self._manual_slope_deg: float | None = None
 
         self._tabs: Dict[str, FertiMaqTab] = {}
@@ -170,18 +172,25 @@ class FertiMaqApp:
         if source == "manual":
             self.manual_area_var.set(f"{hectares:.2f}")
 
-    def set_map_slopes(self, average_deg: float, maximum_deg: float) -> None:
+    def set_map_slopes(self, average_deg: float, maximum_deg: float, *, mode_deg: float | None = None) -> None:
         self._field_slope_avg_deg = average_deg
         self._field_slope_max_deg = maximum_deg
+        self._field_slope_mode_deg = mode_deg
         self.field_vars["slope_avg_deg"].set(f"{average_deg:.2f}")
         self.field_vars["slope_max_deg"].set(f"{maximum_deg:.2f}")
+        if mode_deg is not None:
+            self.field_vars["slope_mode_deg"].set(f"{mode_deg:.2f}")
+        else:
+            self.field_vars["slope_mode_deg"].set("")
 
     def clear_map_slopes(self) -> None:
         self._field_slope_avg_deg = None
         self._field_slope_max_deg = None
+        self._field_slope_mode_deg = None
         self.field_vars["slope_avg_deg"].set("")
         self.field_vars["slope_max_deg"].set("")
-        if self.field_vars["slope_mode"].get() in {"medio", "maximo"}:
+        self.field_vars["slope_mode_deg"].set("")
+        if self.field_vars["slope_mode"].get() in {"medio", "maximo", "frequente"}:
             if self._manual_slope_deg is not None:
                 self.apply_slope_mode("manual")
             else:
@@ -207,6 +216,8 @@ class FertiMaqApp:
             slope_deg = self._field_slope_avg_deg
         elif mode == "maximo":
             slope_deg = self._field_slope_max_deg
+        elif mode == "frequente":
+            slope_deg = self._field_slope_mode_deg
         elif mode == "manual":
             slope_deg = self._manual_slope_deg
         else:
