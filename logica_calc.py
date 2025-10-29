@@ -30,11 +30,6 @@ class Sulcador(Enum):
     DISCOS = "DISCOS"   # equivalente a "Discos Duplos"
     FACAO = "FACAO"
 
-
-# =========================
-# Entradas e Saídas
-# =========================
-
 @dataclass(frozen=True)
 class Inputs:
     """Entradas do cálculo (espelham as células de entrada da planilha)
