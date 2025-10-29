@@ -42,7 +42,8 @@ class PlantabilidadeTab(FertiMaqTab):
         self._sementes_puras_var = ctk.StringVar(value="98")
         self._qualidade_var = ctk.StringVar(value="9")
 
-        self._rendimento_operacional_var = ctk.StringVar(value="65")
+        # Rendimento operacional agora é compartilhado via app.input_vars
+        self._rendimento_operacional_var = self.app.input_vars.get("rendimento_operacional", ctk.StringVar(value="65"))
 
         self._status_insumos_var = ctk.StringVar(value="Informe os dados e calcule a regulagem.")
         self._sementes_m_var = ctk.StringVar(value="--")
@@ -251,15 +252,7 @@ class PlantabilidadeTab(FertiMaqTab):
         body.grid(row=1, column=0, sticky="ew", padx=20, pady=(12, 12))
         body.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(
-            body,
-            text="Rendimento operacional (%)",
-            anchor="w",
-            font=self._font_label_bold,
-        ).grid(row=0, column=0, sticky="w", pady=6)
-        ctk.CTkEntry(body, textvariable=self._rendimento_operacional_var, width=140).grid(
-            row=0, column=1, sticky="ew", padx=(10, 0), pady=6
-        )
+        # Rendimento operacional movido para a aba Dimensionamento; continua sendo usado daqui via var compartilhada.
 
         info_frame = ctk.CTkFrame(parent, fg_color="transparent")
         info_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 12))

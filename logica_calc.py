@@ -151,10 +151,10 @@ def calc_peso_trator_t(cv_trator: float) -> float:
 
 
 def calc_acrescimo_aclive_N(aclive_percent: float, peso_semeadora_t: float, peso_trator_t: float) -> float:
-    """Equivalente a I7 = (C8 * 90) * (F7 * F8)
-       Obs.: F7 e F8 estão em toneladas, a constante é 90 (da planilha).
+    """Equivalente a I7 = (C8 * 70) * (F7 * F8)
+       Obs.: F7 e F8 estão em toneladas, a constante foi ajustada para 70.
     """
-    return (aclive_percent * 90.0) * (peso_semeadora_t * peso_trator_t)
+    return (aclive_percent * 70.0) * (peso_semeadora_t * peso_trator_t)
 
 
 def calc_ft_N(preparo: Preparo,
@@ -196,7 +196,7 @@ def calcular(inp: Inputs) -> Results:
     Passos equivalentes:
       (1) F7: peso semeadora (t) = (I27 * C11) / 1000
       (2) F8: peso trator (t)    = (C12 * 60) / 1000
-      (3) I7: acréscimo aclive   = (C8 * 90) * (F7 * F8)
+      (3) I7: acréscimo aclive   = (C8 * 70) * (F7 * F8)
       (4) I14: fator do solo     = PROCV(C7, H10:I12, 2, FALSO) [embutido na calc_ft_N]
       (5) I20: força sulcador    = PROCV(C10, H17:I18, 2, FALSO) [embutido na calc_ft_N]
       (6) Ft (N):

@@ -8,6 +8,7 @@ from dataclasses import replace
 import customtkinter as ctk
 
 from ferticalc_ui_blueprint import create_card, primary_button, section_title
+from fertimaq.plantabilidade_calcs import capacidade_campo
 from logica_calc import Inputs, Sulcador, calcular
 
 from .base import FertiMaqTab, tab_registry
@@ -26,6 +27,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._tracao_var = ctk.StringVar(value="4 x 2")
         self._cv_trator_var = ctk.StringVar(value="80.0")
         self._velocidade_var = ctk.StringVar(value="5.6")
+        self._rendimento_operacional_var = self.app.input_vars.get("rendimento_operacional", ctk.StringVar(value="65"))
 
         # Area vars
         self._preparo_var = ctk.StringVar(value="Plantio Direto")
@@ -119,6 +121,12 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             row=4, column=1, sticky="ew", padx=(12, 0), pady=6
         )
 
+        # Rendimento operacional (%)
+        ctk.CTkLabel(conjunto_body, text="Rendimento operacional (%)", anchor="w").grid(row=5, column=0, sticky="w", pady=6)
+        ctk.CTkEntry(conjunto_body, textvariable=self._rendimento_operacional_var, width=140).grid(
+            row=5, column=1, sticky="ew", padx=(12, 0), pady=6
+        )
+
         primary_button(
             conjunto_card,
             text="Calcular dimensionamento",
@@ -189,7 +197,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             padding={"padx": (0, 10), "pady": (0, 0)},
         )
         resultado_card.grid_columnconfigure(0, weight=1)
-        section_title(resultado_card, "RESULTADOS DO DIMENSIONAMENTO")
+        section_title(resultado_card, "CÁLCULOS REALIZADOS")
 
         self._status_label_ref = ctk.CTkLabel(
             resultado_card,
@@ -226,10 +234,10 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             padding={"padx": (10, 0), "pady": (0, 0)},
         )
         recomendacao_card.grid_columnconfigure(0, weight=1)
-        recomendacao_card.grid_rowconfigure(2, weight=1)
-        section_title(recomendacao_card, "RECOMENDACOES")
+        recomendacao_card.grid_rowconfigure(2, weight=0)
+        section_title(recomendacao_card, "RESULTADOS DO DIMENSIONAMENTO")
 
-        self._recomendacao_var = ctk.StringVar(value="Calcule o dimensionamento para receber recomendacoes.")
+        self._recomendacao_var = ctk.StringVar(value="Calcule o dimensionamento para receber resultados.")
         ctk.CTkLabel(
             recomendacao_card,
             textvariable=self._recomendacao_var,
@@ -257,6 +265,15 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             font=ctk.CTkFont(weight="bold"),
         ).grid(row=4, column=0, sticky="sew", padx=20, pady=(0, 16))
 
+        # Painel visual: rendimento e tempo estimado
+        # Destaques diretamente no card (sem quadro interno)
+        self._cce_display_var = ctk.StringVar(value="--")
+        self._tempo_total_display_var = ctk.StringVar(value="--")
+        ctk.CTkLabel(recomendacao_card, text="CCE (ha/h)", anchor="w", text_color="#a9b7d9").grid(row=2, column=0, sticky="w", pady=(6, 2), padx=20)
+        ctk.CTkLabel(recomendacao_card, textvariable=self._cce_display_var, anchor="w", text_color="#f2f4ff", font=ctk.CTkFont(size=18, weight="bold")).grid(row=2, column=0, sticky="e", pady=(6, 2), padx=20)
+        ctk.CTkLabel(recomendacao_card, text="Tempo estimado (toda operação)", anchor="w", text_color="#a9b7d9").grid(row=3, column=0, sticky="w", pady=(2, 10), padx=20)
+        ctk.CTkLabel(recomendacao_card, textvariable=self._tempo_total_display_var, anchor="w", text_color="#f2f4ff", font=ctk.CTkFont(size=18, weight="bold")).grid(row=3, column=0, sticky="e", pady=(2, 10), padx=20)
+
         # React to slope changes
         self.app.field_vars["slope_selected_deg"].trace_add("write", lambda *_: self._refresh_aclive_label())
         self._refresh_aclive_label()
@@ -274,7 +291,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
     def _create_collapsible_section(
         self, parent: ctk.CTkFrame, *, row: int, title: str, key: str
     ) -> tuple[ctk.CTkFrame, int]:
-        header_frame = ctk.CTkFrame(parent, fg_color="#2a3142", corner_radius=12)
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=12)
         header_frame.grid(row=row, column=0, sticky="ew", padx=20, pady=(0, 6))
         header_frame.grid_columnconfigure(0, weight=1)
         header_frame.configure(cursor="hand2")
@@ -291,7 +308,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         header_frame.bind("<Button-1>", lambda _event, k=key: self._toggle_section(k))
         header_label.bind("<Button-1>", lambda _event, k=key: self._toggle_section(k))
 
-        content_frame = ctk.CTkFrame(parent, fg_color="#1f2330", corner_radius=12)
+        content_frame = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=12)
         content_frame.grid(row=row + 1, column=0, sticky="ew", padx=20, pady=(0, 12))
         content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_columnconfigure(1, weight=1)
@@ -413,6 +430,58 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         )
         self._recomendacao_var.set(recomendacao)
         self._limite_aclive_var.set(limite_info)
+
+        # Disponibilizar os valores dimensionados para outras abas (ex.: Plantabilidade)
+        try:
+            self.app.input_vars["linhas"].set(str(linhas))
+            self.app.input_vars["cv_trator_disponivel"].set(f"{cv_disponivel:.2f}".replace(".", ","))
+            self.app.input_vars["velocidade_kmh"].set(f"{velocidade:.2f}".replace(".", ","))
+        except Exception:
+            # Falha silenciosa para não quebrar o fluxo da aba
+            pass
+
+        # Calcular tempo total de operação usando rendimento, área e espaçamento (da aba Plantabilidade)
+        try:
+            rendimento_pct = float(self._rendimento_operacional_var.get().replace(",", "."))
+            rendimento = rendimento_pct / 100.0 if rendimento_pct else 0.0
+        except ValueError:
+            rendimento = 0.0
+
+        area_text = self.app.field_vars.get("area_hectares", ctk.StringVar(value="")).get()
+        try:
+            area_ha = float(area_text.replace(",", ".")) if area_text else 0.0
+        except ValueError:
+            area_ha = 0.0
+
+        espacamento_m = None
+        try:
+            planta_tab = self.app._tabs.get("plantabilidade")
+            if planta_tab is not None:
+                espacamento_text = planta_tab._espacamento_var.get()
+                espacamento_m = float(espacamento_text.replace(",", ".")) / 100.0
+        except Exception:
+            espacamento_m = None
+
+        if espacamento_m and rendimento and area_ha:
+            try:
+                largura, cce, tempo = capacidade_campo(linhas, espacamento_m, velocidade, rendimento, area_ha)
+                self._cce_display_var.set(f"{cce:,.2f}".replace(",", "."))
+                self._tempo_total_display_var.set(f"{tempo:,.1f} h".replace(",", "."))
+            except Exception:
+                self._cce_display_var.set("--")
+                self._tempo_total_display_var.set("--")
+        else:
+            # Tenta fallback ao tempo já calculado na Plantabilidade
+            try:
+                planta_tab = self.app._tabs.get("plantabilidade")
+                tempo_text = getattr(planta_tab, "_tempo_operacao_var", ctk.StringVar(value="--")).get()
+                self._tempo_total_display_var.set(tempo_text if tempo_text else "--")
+                # Tenta também pegar CCE da plantabilidade
+                cce_text = getattr(planta_tab, "_cce_var", ctk.StringVar(value="--")).get()
+                self._cce_display_var.set(cce_text if cce_text else "--")
+            except Exception:
+                self._tempo_total_display_var.set("--")
+                self._cce_display_var.set("--")
 
     def _gerar_recomendacao(
         self,

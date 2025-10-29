@@ -83,6 +83,7 @@ class FertiMaqApp:
             "aclive_percent": ctk.StringVar(value="12.0"),
             "cv_trator_disponivel": ctk.StringVar(value="80.0"),
             "velocidade_kmh": ctk.StringVar(value="5.6"),
+            "rendimento_operacional": ctk.StringVar(value="65"),
         }
 
         self.status_var = ctk.StringVar(value="Informe os dados e execute o calculo.")
