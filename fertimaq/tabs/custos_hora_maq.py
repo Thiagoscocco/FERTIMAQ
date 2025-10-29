@@ -287,7 +287,7 @@ class CustosHoraMaqTab(FertiMaqTab):
 
         ctk.CTkLabel(
             trator_frame,
-            text="VARIÁVEIS",
+            text="TRATOR",
             font=self._font_label_bold,
             text_color="#5a7bbf",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=15, pady=(12, 8))
@@ -311,23 +311,12 @@ class CustosHoraMaqTab(FertiMaqTab):
 
         ctk.CTkLabel(
             semeadora_frame,
-            text="VARIÁVEIS",
+            text="SEMEADORA",
             font=self._font_label_bold,
             text_color="#5a7bbf",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=15, pady=(12, 8))
 
         row = 1
-        ctk.CTkLabel(
-            semeadora_frame,
-            text="Consumo (L/h)",
-            anchor="w",
-            font=self._font_label,
-            text_color="#a9b7d9",
-        ).grid(row=row, column=0, sticky="w", padx=15, pady=6)
-        ctk.CTkEntry(semeadora_frame, textvariable=self._semeadora_consumo_h_var, width=140).grid(
-            row=row, column=1, sticky="ew", padx=(10, 0), pady=6
-        )
-        row += 1
         self._add_input_row(semeadora_frame, row, "Custo reparo total (R$)", self._semeadora_reparo_total_var, "semeadora_reparo")
         row += 1
         self._add_input_row(semeadora_frame, row, "Lub./Aditivos total (R$)", self._semeadora_lfa_total_var, "semeadora_lfa")
@@ -663,9 +652,18 @@ class CustosHoraMaqTab(FertiMaqTab):
             semeadora_lfa_total = self._parse_float(self._semeadora_lfa_total_var)
             semeadora_pneus_total = self._parse_float(self._semeadora_pneus_total_var)
 
-            # Validar inputs críticos
-            if not trator_valor_aq or not trator_horas_ano or not semeadora_valor_aq or not semeadora_horas_ano:
-                self._status_resultados_var.set("Preencha todos os campos obrigatórios (valor aquisição e horas/ano).")
+            # Validar inputs críticos e relatar o que falta
+            faltando: list[str] = []
+            if not trator_valor_aq:
+                faltando.append("Valor de aquisição do trator")
+            if not trator_horas_ano:
+                faltando.append("Horas/ano do trator")
+            if not semeadora_valor_aq:
+                faltando.append("Valor de aquisição da semeadora")
+            if not semeadora_horas_ano:
+                faltando.append("Horas/ano da semeadora")
+            if faltando:
+                self._status_resultados_var.set("Faltam dados: " + "; ".join(faltando) + ".")
                 return
 
             # Criar inputs para cálculos

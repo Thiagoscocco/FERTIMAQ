@@ -106,33 +106,7 @@ class PlantabilidadeTab(FertiMaqTab):
         section_title(resultados_card, "RESULTADOS")
         self._build_insumos_resultados(resultados_card)
 
-        bottom_row = ctk.CTkFrame(scroll, fg_color="transparent")
-        bottom_row.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
-        bottom_row.grid_columnconfigure((0, 1), weight=1, uniform="plantabilidade_bottom")
-
-        capacidade_card = create_card(
-            bottom_row,
-            row=0,
-            column=0,
-            sticky="nsew",
-            padding={"padx": (0, 10), "pady": (0, 0)},
-        )
-        capacidade_card.grid_columnconfigure(0, weight=1)
-        section_title(capacidade_card, "CAPACIDADE DE OPERACAO")
-        self._build_capacidade_inputs(capacidade_card)
-
-        capacidade_resultados_card = create_card(
-            bottom_row,
-            row=0,
-            column=1,
-            sticky="nsew",
-            padding={"padx": (10, 0), "pady": (0, 0)},
-        )
-        capacidade_resultados_card.grid_columnconfigure(0, weight=1)
-        section_title(capacidade_resultados_card, "RESULTADOS")
-        self._build_capacidade_resultados(capacidade_resultados_card)
-
-        self._refresh_capacidade_contexto()
+        # Painéis inferiores removidos conforme solicitado
 
     def _build_insumos_inputs(self, parent: ctk.CTkFrame) -> None:
         body = ctk.CTkFrame(parent, fg_color="transparent")
@@ -404,14 +378,18 @@ class PlantabilidadeTab(FertiMaqTab):
         sementes_totais_ha = sementes_ha
         sacas_equivalentes = sementes_ha / 60000.0
         sementes_m2 = sementes_m / espacamento_m if espacamento_m else float("inf")
+        # plantas/m2: usar populacao alvo por m2; corrigir se valor irreal
         plantas_m2 = populacao / 10000.0
+        if plantas_m2 > 200:  # guarda-chuva contra entradas descabidas
+            plantas_m2 = max(0.0, sementes_ha / 10000.0)
         fertilizante_g_m2 = fertilizante * 0.1
 
-        self._mais_info_vars["sementes_totais"].set(self._format(sementes_totais_ha, 0))
-        self._mais_info_vars["sementes_sacas"].set(self._format(sacas_equivalentes, 2))
-        self._mais_info_vars["sementes_m2"].set(self._format(sementes_m2, 3))
-        self._mais_info_vars["plantas_m2"].set(self._format(plantas_m2, 3))
-        self._mais_info_vars["fertilizante_m2"].set(self._format(fertilizante_g_m2, 2))
+        # Formatação enxuta nas "Mais informações"
+        self._mais_info_vars["sementes_totais"].set(self._format(sementes_totais_ha, 1))
+        self._mais_info_vars["sementes_sacas"].set(self._format(sacas_equivalentes, 1))
+        self._mais_info_vars["sementes_m2"].set(self._format(sementes_m2, 1))
+        self._mais_info_vars["plantas_m2"].set(self._format(plantas_m2, 1))
+        self._mais_info_vars["fertilizante_m2"].set(self._format(fertilizante_g_m2, 1))
 
         self._status_insumos_var.set("Regulagem calculada com sucesso.")
         self._set_status_color(self._status_insumos_label, "#3f7e2d")

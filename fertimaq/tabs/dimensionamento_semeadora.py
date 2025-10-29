@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
@@ -12,6 +13,11 @@ from fertimaq.plantabilidade_calcs import capacidade_campo
 from logica_calc import Inputs, Sulcador, calcular
 
 from .base import FertiMaqTab, tab_registry
+
+if TYPE_CHECKING:
+    # Imports apenas para tipagem, evitando dependências em tempo de execução
+    from fertimaq.app import FertiMaqApp
+    from logica_calc import Results
 
 
 @tab_registry.register
@@ -225,6 +231,8 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         self._add_result_row(self._cv_content, 2, "CV necessario (terreno plano)", self._cv_plano_var)
         self._add_result_row(self._cv_content, 3, "Eficiencia de tracao (%)", self._eficiencia_tracao_var)
         self._add_result_row(self._cv_content, 4, "CV util (com eficiencia)", self._cv_util_var)
+        self._consumo_h_var = ctk.StringVar(value="--")
+        self._add_result_row(self._cv_content, 5, "Consumo diesel (L/h)", self._consumo_h_var)
 
         recomendacao_card = create_card(
             bottom_row,
@@ -236,6 +244,7 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
         recomendacao_card.grid_columnconfigure(0, weight=1)
         recomendacao_card.grid_rowconfigure(2, weight=0)
         section_title(recomendacao_card, "RESULTADOS DO DIMENSIONAMENTO")
+        self._recomendacao_card = recomendacao_card
 
         self._recomendacao_var = ctk.StringVar(value="Calcule o dimensionamento para receber resultados.")
         ctk.CTkLabel(
@@ -246,24 +255,25 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
             justify="left",
         ).grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 6))
 
+        # Recomendações e limites movidos para o card de características da área (evitar sobreposição)
         ctk.CTkLabel(
-            recomendacao_card,
+            area_body,
             textvariable=self._limite_aclive_var,
             anchor="w",
             wraplength=320,
             justify="left",
             text_color="#e0c060",
-        ).grid(row=3, column=0, sticky="ew", padx=20, pady=(4, 10))
+        ).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 6))
 
         ctk.CTkLabel(
-            recomendacao_card,
+            area_body,
             textvariable=self._sulcador_highlight_var,
             anchor="w",
             wraplength=320,
             justify="left",
             text_color="#f0a935",
             font=ctk.CTkFont(weight="bold"),
-        ).grid(row=4, column=0, sticky="sew", padx=20, pady=(0, 16))
+        ).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         # Painel visual: rendimento e tempo estimado
         # Destaques diretamente no card (sem quadro interno)
@@ -467,6 +477,23 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
                 largura, cce, tempo = capacidade_campo(linhas, espacamento_m, velocidade, rendimento, area_ha)
                 self._cce_display_var.set(f"{cce:,.2f}".replace(",", "."))
                 self._tempo_total_display_var.set(f"{tempo:,.1f} h".replace(",", "."))
+                # Consumo diesel total = consumo_h * tempo
+                consumo_h = 0.11 * cv_disponivel
+                self._consumo_h_var.set(f"{consumo_h:,.1f}".replace(",", "."))
+                self._consumo_total_display_var = getattr(self, "_consumo_total_display_var", ctk.StringVar(value="--"))
+                try:
+                    ctk.CTkLabel(self._cv_content, text="", anchor="w").grid  # no-op to ensure widget created
+                except Exception:
+                    pass
+                # Adiciona label de consumo total no card de resultados (abaixo do tempo)
+                try:
+                    # Recria ou atualiza se ja existe
+                    self._consumo_total_label
+                except Exception:
+                    ctk.CTkLabel(self._recomendacao_card, text="Consumo diesel total (L)", anchor="w", text_color="#a9b7d9").grid(row=4, column=0, sticky="w", pady=(0, 10), padx=20)
+                    self._consumo_total_label = ctk.CTkLabel(self._recomendacao_card, textvariable=self._consumo_total_display_var, anchor="w", text_color="#f2f4ff", font=ctk.CTkFont(size=18, weight="bold"))
+                    self._consumo_total_label.grid(row=4, column=0, sticky="e", pady=(0, 10), padx=20)
+                self._consumo_total_display_var.set(f"{(consumo_h * tempo):,.1f}".replace(",", "."))
             except Exception:
                 self._cce_display_var.set("--")
                 self._tempo_total_display_var.set("--")
