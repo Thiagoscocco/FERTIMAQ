@@ -438,10 +438,19 @@ class CustosHoraMaqTab(FertiMaqTab):
 
     def _parse_float(self, var: ctk.StringVar, default: float = 0.0) -> float:
         """Parse float from string var."""
+        raw = (var.get() or "").strip().replace(" ", "")
+        if not raw:
+            return default
+        # Normaliza vírgula para ponto (decimal)
+        text = raw.replace(",", ".")
+        # Se houver mais de um ponto, os anteriores são separadores de milhar: remove-os
+        if text.count(".") > 1:
+            head, tail = text.rsplit(".", 1)
+            head = head.replace(".", "")
+            text = head + "." + tail
         try:
-            text = var.get().replace(",", ".").strip()
-            return float(text) if text else default
-        except ValueError:
+            return float(text)
+        except Exception:
             return default
 
     def _format(self, value: float, decimals: int = 2) -> str:
@@ -476,6 +485,15 @@ class CustosHoraMaqTab(FertiMaqTab):
 
     def _get_cce(self) -> float:
         """Obtém CCE se disponível da aba plantabilidade."""
+        # Prioriza CCE salvo no estado global
+        try:
+            cce_text = self.app.input_vars.get("cce_ha_h")
+            if cce_text is not None:
+                raw = cce_text.get()
+                if raw:
+                    return float(raw.replace(".", "").replace(",", "."))
+        except Exception:
+            pass
         # Try to get from plantabilidade tab if calculated
         try:
             plantabilidade_tab = self.app._tabs.get("plantabilidade")
@@ -516,19 +534,24 @@ class CustosHoraMaqTab(FertiMaqTab):
             valor = semeadora_linhas * 20000.0 if semeadora_linhas else 0.0
             var.set(self._format(valor, 2))
         elif key == "trator_valor_suc":
-            valor_aq = self._parse_float(self._trator_valor_aq_var)
-            if not valor_aq:
-                valor_aq = trator_cv * 3000.0 if trator_cv else 0.0
-            var.set(self._format(valor_aq * 0.30, 2))
+            # Se o usuário digitou valor de aquisição, priorizar esse; senão, usar estimado
+            valor_digitado = self._parse_float(self._trator_valor_aq_var)
+            base = valor_digitado if valor_digitado else (trator_cv * 3000.0 if trator_cv else 0.0)
+            var.set(self._format(base * 0.30, 2))
         elif key == "semeadora_valor_suc":
-            valor_aq = self._parse_float(self._semeadora_valor_aq_var)
-            if not valor_aq:
-                valor_aq = semeadora_linhas * 20000.0 if semeadora_linhas else 0.0
-            var.set(self._format(valor_aq * 0.40, 2))
+            valor_digitado = self._parse_float(self._semeadora_valor_aq_var)
+            base = valor_digitado if valor_digitado else (semeadora_linhas * 20000.0 if semeadora_linhas else 0.0)
+            var.set(self._format(base * 0.40, 2))
         elif key == "trator_horas":
             var.set(self._format(area_ha * 10.0, 1) if area_ha else "")
         elif key == "semeadora_horas":
-            horas = cce * area_ha if (cce and area_ha) else area_ha * 10.0 if area_ha else 0.0
+            # horas/ano estimadas = area_trabalhada_ano / CCE (se CCE > 0)
+            try:
+                area_sem_text = self._semeadora_area_ano_var.get()
+                area_sem = float(area_sem_text.replace(".", "").replace(",", ".")) if area_sem_text else area_ha
+            except Exception:
+                area_sem = area_ha
+            horas = (area_sem / cce) if (cce and area_sem) else (area_sem * 10.0 if area_sem else 0.0)
             var.set(self._format(horas, 1) if horas else "")
         elif key == "trator_juros":
             var.set("6")
@@ -545,7 +568,8 @@ class CustosHoraMaqTab(FertiMaqTab):
         elif key == "salario":
             var.set("3000")
         elif key == "trator_consumo":
-            consumo = self._get_consumo_h()
+            # Estima consumo pelo CV (0.11 L/h por cv)
+            consumo = 0.11 * self._get_trator_cv()
             var.set(self._format(consumo, 1))
         elif key == "trator_preco":
             var.set("6.0")
@@ -562,6 +586,7 @@ class CustosHoraMaqTab(FertiMaqTab):
             # Custo reparo total = 40% do valor de aquisição
             var.set(self._format(valor_aq * 0.40, 2))
         elif key == "trator_lfa":
+            # 10% do custo total de combustível DO TRATOR ao longo da vida útil
             consumo_h = self._parse_float(self._trator_consumo_h_var, 0.0) or self._get_consumo_h()
             preco_litro = self._parse_float(self._trator_preco_litro_var, 6.0)
             trator_horas_ano = self._parse_float(self._trator_horas_ano_var)
@@ -576,23 +601,16 @@ class CustosHoraMaqTab(FertiMaqTab):
             else:
                 var.set("")
         elif key == "semeadora_lfa":
-            # Calcular custo/h do trator para LFA
+            # Mesmo total do TRATOR: 10% do combustível total do trator ao longo da vida
             consumo_h_tr = self._parse_float(self._trator_consumo_h_var, 0.0) or self._get_consumo_h()
             preco_litro_tr = self._parse_float(self._trator_preco_litro_var, 6.0)
             tr_horas_ano = self._parse_float(self._trator_horas_ano_var) or (area_ha * 10.0 if area_ha else 0.0)
             tr_anos = self._parse_float(self._trator_anos_var, 10.0)
             vida_tr = tr_horas_ano * tr_anos
-            lfa_h_trator = 0.0
             if vida_tr:
                 custo_diesel_total_tr = consumo_h_tr * vida_tr * preco_litro_tr
-                lfa_h_trator = (0.10 * custo_diesel_total_tr) / vida_tr
-
-            sem_horas_ano = self._parse_float(self._semeadora_horas_ano_var) or (area_ha * 10.0 if area_ha else 0.0)
-            sem_anos = self._parse_float(self._semeadora_anos_var, 10.0)
-            vida_sem = sem_horas_ano * sem_anos
-            if vida_sem and lfa_h_trator:
-                estimativa_total_sem = lfa_h_trator * vida_sem
-                var.set(self._format(estimativa_total_sem, 2))
+                estimativa_total = 0.10 * custo_diesel_total_tr
+                var.set(self._format(estimativa_total, 2))
             else:
                 var.set("")
         elif key == "trator_pneus":
@@ -753,35 +771,27 @@ class CustosHoraMaqTab(FertiMaqTab):
             vida_trator_pneu = trator_horas_ano_pneu * trator_anos_pneu
             vida_sem_pneu = sem_horas_ano_pneu * sem_anos_pneu
 
-            # Recalcular usando valores totais fornecidos
-            fx, var, totais = calcular_tudo_custos(fixos_inputs, variaveis_inputs)
+            # Calcular fixos via motor
+            fx, _, _ = calcular_tudo_custos(fixos_inputs, variaveis_inputs)
 
-            # Ajustar variáveis se valores totais foram fornecidos
-            if trator_reparo_total and vida_trator_rep:
-                var.trator_reparos_h = trator_reparo_total / vida_trator_rep
-            if semeadora_reparo_total and vida_sem_rep:
-                var.sem_reparos_h = semeadora_reparo_total / vida_sem_rep
+            # Calcular variáveis de forma determinística (LFA/h = 10% do diesel/h)
+            diesel_tr_h = trator_consumo_h * trator_preco_litro
+            reparos_tr_h = (trator_reparo_total / vida_trator_rep) if vida_trator_rep else 0.0
+            lfa_tr_h = 0.10 * diesel_tr_h
+            pneus_tr_h = (trator_pneus_total / vida_trator_pneu) if vida_trator_pneu else 0.0
+            trator_variaveis_h = diesel_tr_h + reparos_tr_h + lfa_tr_h + pneus_tr_h
 
-            if trator_lfa_total and vida_trator_lfa:
-                # Dividir o valor total pela vida útil
-                var.trator_lfa_total_h = trator_lfa_total / vida_trator_lfa
-            if semeadora_lfa_total and vida_sem_lfa:
-                var.sem_lfa_total_h = semeadora_lfa_total / vida_sem_lfa
-
-            if trator_pneus_total and vida_trator_pneu:
-                var.trator_pneus_h = trator_pneus_total / vida_trator_pneu
-            if semeadora_pneus_total and vida_sem_pneu:
-                var.sem_pneus_h = semeadora_pneus_total / vida_sem_pneu
-
-            # Recalcular totais variáveis
-            var.trator_variaveis_h = var.trator_diesel_h + var.trator_reparos_h + var.trator_lfa_total_h + var.trator_pneus_h
-            var.sem_variaveis_h = var.sem_diesel_h + var.sem_reparos_h + var.sem_lfa_total_h + var.sem_pneus_h
-            var.conjunto_variaveis_h = var.trator_variaveis_h + var.sem_variaveis_h
+            diesel_sem_h = 0.0
+            reparos_sem_h = (semeadora_reparo_total / vida_sem_rep) if vida_sem_rep else 0.0
+            # Mesmo LFA/h do trator
+            lfa_sem_h = lfa_tr_h
+            pneus_sem_h = (semeadora_pneus_total / vida_sem_pneu) if vida_sem_pneu else 0.0
+            sem_variaveis_h = diesel_sem_h + reparos_sem_h + lfa_sem_h + pneus_sem_h
 
             # Calcular totais finais
-            trator_hora_maq = fx.trator_fixos_h + var.trator_variaveis_h
-            semeadora_hora_maq = fx.semeadora_fixos_h + var.sem_variaveis_h
-            conjunto_hora_maq = fx.conjunto_fixos_h + var.conjunto_variaveis_h
+            trator_hora_maq = fx.trator_fixos_h + trator_variaveis_h
+            semeadora_hora_maq = fx.semeadora_fixos_h + sem_variaveis_h
+            conjunto_hora_maq = fx.conjunto_fixos_h + trator_variaveis_h + sem_variaveis_h
 
             # Atualizar UI
             self._trator_hora_maq_var.set(self._format(trator_hora_maq, 2))

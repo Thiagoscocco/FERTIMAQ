@@ -477,6 +477,11 @@ class DimensionamentoSemeadoraTab(FertiMaqTab):
                 largura, cce, tempo = capacidade_campo(linhas, espacamento_m, velocidade, rendimento, area_ha)
                 self._cce_display_var.set(f"{cce:,.2f}".replace(",", "."))
                 self._tempo_total_display_var.set(f"{tempo:,.1f} h".replace(",", "."))
+                # Disponibiliza CCE para outras abas (usado em Custos Hora/Máquina)
+                try:
+                    self.app.input_vars["cce_ha_h"].set(f"{cce:.3f}".replace(".", ","))
+                except Exception:
+                    pass
                 # Consumo diesel total = consumo_h * tempo
                 consumo_h = 0.11 * cv_disponivel
                 self._consumo_h_var.set(f"{consumo_h:,.1f}".replace(",", "."))
